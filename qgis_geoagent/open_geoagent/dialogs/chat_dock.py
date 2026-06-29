@@ -31,10 +31,12 @@ from qgis.PyQt.QtCore import (
     QSettings,
     QThread,
     QTimer,
+    QUrl,
     pyqtSignal,
 )
 from qgis.PyQt.QtGui import (
     QCursor,
+    QDesktopServices,
     QGuiApplication,
     QIcon,
     QKeySequence,
@@ -146,6 +148,7 @@ SAMPLE_PROMPTS = [
 ]
 AGENT_MODES = [
     "General QGIS",
+    "KADAS",
     "GEE Data Catalogs",
     "GeoAI",
     "HyperCoast",
@@ -1955,6 +1958,7 @@ class ChatWorker(QThread):
             )
             factory_name = {
                 "General QGIS": "for_qgis",
+                "KADAS": "for_kadas",
                 "WhiteboxTools": "for_whitebox",
                 "NASA Earthdata": "for_nasa_earthdata",
                 "NASA OPERA": "for_nasa_opera",
@@ -2480,6 +2484,8 @@ class ChatDockWidget(QDockWidget):
         self._history_key = _project_history_key(iface)
         self._jobs = []
         self._active_job_index = None
+        self._run_logger = None
+        self._last_run_log_path = None
 
         self.setAllowedAreas(
             Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea
@@ -2563,10 +2569,17 @@ class ChatDockWidget(QDockWidget):
         self.stream_check.setToolTip(
             "Show model text as it arrives instead of waiting for the full response."
         )
+        self.developer_mode_check = QCheckBox("Developer mode")
+        self.developer_mode_check.setToolTip(
+            "Record every chat turn — prompt, tools called, their input args "
+            "(including generated code) and results — to a JSONL run log. Use "
+            "the 'Logs' button to open the folder."
+        )
         mode_layout = QHBoxLayout()
         mode_layout.addWidget(self.fast_check)
         mode_layout.addWidget(self.stream_check)
         mode_layout.addWidget(self.auto_approve_tools_check)
+        mode_layout.addWidget(self.developer_mode_check)
         mode_layout.addStretch(1)
         model_layout.addRow("", mode_layout)
 
@@ -2754,6 +2767,14 @@ class ChatDockWidget(QDockWidget):
         self.copy_script_btn.clicked.connect(self._copy_last_script_snippet)
         secondary_button_layout.addWidget(self.copy_script_btn)
 
+        self.logs_btn = QPushButton("Logs")
+        self.logs_btn.setToolTip(
+            "Open the developer run-log folder (enable 'Developer mode' to record "
+            "each turn's prompt, tool calls, code and results)."
+        )
+        self.logs_btn.clicked.connect(self._open_run_logs)
+        secondary_button_layout.addWidget(self.logs_btn)
+
         for button in (
             self.send_btn,
             self.voice_btn,
@@ -2764,6 +2785,7 @@ class ChatDockWidget(QDockWidget):
             self.import_md_btn,
             self.copy_md_btn,
             self.copy_script_btn,
+            self.logs_btn,
         ):
             button.setMinimumWidth(0)
             button.setSizePolicy(
@@ -2803,6 +2825,9 @@ class ChatDockWidget(QDockWidget):
             )
             self.auto_approve_tools_check.setChecked(
                 _setting(self.settings, "auto_approve_tools", False, bool)
+            )
+            self.developer_mode_check.setChecked(
+                _setting(self.settings, "developer_mode", False, bool)
             )
             expanded = _setting(self.settings, "model_section_expanded", True, bool)
             self.model_group.setChecked(expanded)
@@ -2845,6 +2870,10 @@ class ChatDockWidget(QDockWidget):
         self.settings.setValue(
             f"{SETTINGS_PREFIX}auto_approve_tools",
             self.auto_approve_tools_check.isChecked(),
+        )
+        self.settings.setValue(
+            f"{SETTINGS_PREFIX}developer_mode",
+            self.developer_mode_check.isChecked(),
         )
         self.settings.setValue(
             f"{SETTINGS_PREFIX}agent_mode", self.agent_mode_combo.currentText()
@@ -4316,6 +4345,43 @@ class ChatDockWidget(QDockWidget):
         job["tool_calls"] = result.get("tool_calls", [])
         job["error"] = result.get("error", "")
         self._render_jobs()
+        if self.developer_mode_check.isChecked():
+            self._log_run(job, result)
+
+    def _log_run(self, job, result):
+        """Append the finished turn to the developer run log (best-effort)."""
+        try:
+            from ..run_logger import RunLogger, build_turn_record
+
+            if self._run_logger is None:
+                self._run_logger = RunLogger()
+            path = self._run_logger.log_turn(build_turn_record(job, result))
+            if path is not None:
+                self._last_run_log_path = str(path)
+        except Exception:
+            # Logging must never break a chat turn.
+            pass
+
+    def _open_run_logs(self):
+        """Open the developer run-log folder in the system file manager."""
+        try:
+            from ..run_logger import RunLogger
+
+            if self._run_logger is None:
+                self._run_logger = RunLogger()
+            folder = self._run_logger.log_dir
+            folder.mkdir(parents=True, exist_ok=True)
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
+            if self.developer_mode_check.isChecked():
+                self.status_label.setText(f"Run logs: {folder}")
+            else:
+                self.status_label.setText(
+                    f"Run logs: {folder} (enable Developer mode to record)"
+                )
+            self.status_label.setStyleSheet("color: gray; font-size: 10px;")
+        except Exception as exc:
+            self.status_label.setText(f"Could not open run logs: {exc}")
+            self.status_label.setStyleSheet("color: red; font-size: 10px;")
 
     def _render_jobs(self):
         """Refresh the compact jobs table."""

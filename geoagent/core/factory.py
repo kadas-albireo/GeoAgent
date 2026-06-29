@@ -17,7 +17,9 @@ from geoagent.tools.anymap import anymap_tools
 from geoagent.tools.browser_maplibre import browser_maplibre_tools
 from geoagent.tools.geoai import geoai_tools
 from geoagent.tools.gee_data_catalogs import gee_data_catalogs_tools
+from geoagent.tools.geoadmin import geoadmin_tools
 from geoagent.tools.hypercoast import hypercoast_tools
+from geoagent.tools.kadas import kadas_tools
 from geoagent.tools.images import image_generation_tools
 from geoagent.tools.leafmap import leafmap_tools
 from geoagent.tools.nasa_earthdata import earthdata_tools
@@ -284,6 +286,68 @@ Workflow guidance:
   layer names when available.
 """
 
+KADAS_SYSTEM_PROMPT = """\
+You are an AI assistant embedded in KADAS Albireo 2 a QGIS-based mapping
+application used mainly with Swiss swisstopo geodata. You have the standard
+QGIS layer/canvas tools PLUS KADAS-specific tools for the swisstopo geoadmin
+catalog, place-name search, and KADAS-native map annotations. Prefer these
+dedicated tools over writing PyQGIS by hand.
+
+How KADAS operates (use this to choose tools):
+- KADAS does not ship a fixed layer list. The layer catalogue the user browses
+  is the live swisstopo geoadmin catalog (886 layers), and place search uses
+  the geoadmin SearchServer. Coordinates the user gives are WGS84 lon/lat;
+  Swiss local data is usually in LV95 (EPSG:2056). The default basemaps are
+  swisstopo WMTS tiles (national maps, SWISSIMAGE aerial, hillshade).
+
+Catalog & data loading:
+- To find a layer for a topic ("aerial photos", "electric stations", "property
+  boundaries", "railways"), call search_geoadmin_catalog to resolve the topic
+  to a layerBodId, then load_geoadmin_layer with that bod_id. Do not guess
+  bodIds.
+- load_geoadmin_layer is the ONLY correct way to add a swisstopo/geoadmin layer:
+  it loads via the official WMS service exactly like the KADAS geocatalog. NEVER
+  load swisstopo layers with add_xyz_tile_layer, add_raster_layer, or a
+  hand-built WMTS/XYZ tile URL (e.g. .../{z}/{x}/{y}.png). Those use the wrong
+  tiling scheme/CRS for the swisstopo grid and render as a blank layer. If
+  load_geoadmin_layer fails, report the error — do not fall back to a tile URL.
+- Known mappings you can use directly: aerial/SWISSIMAGE ->
+  ch.swisstopo.swissimage-product; national map (colour) ->
+  ch.swisstopo.pixelkarte-farbe; hillshade ->
+  ch.swisstopo.swissalti3d-reliefschattierung; cadastre/property boundaries ->
+  ch.kantone.cadastralwebmap-farbe.
+- For local files the user names, use the QGIS add_vector_layer /
+  add_raster_layer tools.
+
+Place search / navigation:
+- To find a place ("Matterhorn", "Basel main station", "Thunplatz, Bern"), call
+  search_location to get WGS84 coordinates and a bbox, then center/zoom with the
+  QGIS set_center / zoom_to_extent tools, or use locate_and_zoom for a one-shot
+  recentre. Never fabricate coordinates.
+
+KADAS-native annotations (markers and shapes):
+- Use the dedicated KADAS tools, NOT QgsAnnotation or temporary vector layers:
+  add_map_marker (pins/markers), add_text_annotation (labels), add_map_circle
+  (radius in metres), add_map_rectangle (bbox), add_map_polygon. All take WGS84
+  lon/lat. clear_annotations removes the agent's annotation layer and requires
+  confirmation.
+- A common pattern is search_location -> add_map_marker to pin a named place.
+
+Reading KADAS-native layers (Pins, GPX, annotations):
+- These are KadasItemLayer plugin layers holding drawable items, not QGIS vector
+  features, so list_project_layers only sees their extent/bounding box. To
+  understand their contents — including each item's coordinates — call
+  list_kadas_item_layers to discover them, then get_kadas_layer_items(layer_name)
+  to read every item's type, label, and WGS84 lon/lat. Do not report only a
+  layer's bounding box when the user asks about the items inside it.
+
+- When a request truly has no dedicated tool (custom processing, raster
+  band/labeling tweaks), write a short PyQGIS script and run it with
+  run_pyqgis_script rather than refusing.
+- Keep responses concise and include the tool name, resolved bodId/coordinates,
+  and loaded layer or annotation names when available.
+"""
+
 WHITEBOX_SYSTEM_PROMPT = """\
 You are an AI assistant embedded in QGIS with access to WhiteboxTools.
 WhiteboxTools exposes hundreds of geospatial analysis commands through a
@@ -477,6 +541,8 @@ def assemble_tools(
     include_leafmap: bool = False,
     include_anymap: bool = False,
     include_qgis: bool = False,
+    include_geoadmin: bool = False,
+    include_kadas: bool = False,
     include_nasa_earthdata: bool = False,
     include_nasa_opera: bool = False,
     include_gee_data_catalogs: bool = False,
@@ -512,6 +578,16 @@ def assemble_tools(
         qt = _filter_by_imports(qgis_tools(context.qgis_iface, context.qgis_project))
         register_all_tools(registry, qt)
         collected.extend(qt)
+    if include_geoadmin:
+        gat = _filter_by_imports(
+            geoadmin_tools(context.qgis_iface, context.qgis_project)
+        )
+        register_all_tools(registry, gat)
+        collected.extend(gat)
+    if include_kadas:
+        kt = _filter_by_imports(kadas_tools(context.qgis_iface, context.qgis_project))
+        register_all_tools(registry, kt)
+        collected.extend(kt)
     if include_nasa_earthdata:
         earthdata_tool_list = _filter_by_imports(
             earthdata_tools(
@@ -786,6 +862,64 @@ def for_qgis(
     tools, registry = assemble_tools(
         context=ctx,
         include_qgis=True,
+        include_image_generation=True,
+        extra_tools=extra_tools,
+        fast=fast,
+        permission_profile=permission_profile,
+    )
+    cfg = config or GeoAgentConfig()
+    if provider is not None:
+        cfg = cfg.model_copy(update={"provider": provider})
+    if model_id is not None:
+        cfg = cfg.model_copy(update={"model": model_id})
+    return GeoAgent(
+        context=ctx,
+        config=cfg,
+        tools=tools,
+        registry=registry,
+        model=model,
+        provider=provider,
+        model_id=model_id,
+        fast=fast,
+        confirm=confirm,
+        qgis_safe_mode=True,
+    )
+
+
+def for_kadas(
+    iface: Any,
+    project: Any = None,
+    *,
+    config: GeoAgentConfig | None = None,
+    model: Any | None = None,
+    provider: str | None = None,
+    model_id: str | None = None,
+    fast: bool = False,
+    confirm: ConfirmCallback | None = None,
+    extra_tools: Optional[list[Any]] = None,
+    permission_profile: str | None = None,
+) -> GeoAgent:
+    """Bind an agent to KADAS Albireo 2.
+
+    Exposes the general QGIS map/project tools plus the KADAS-specific surface:
+    the swisstopo geoadmin catalog and location search
+    (:mod:`geoagent.tools.geoadmin`) and KADAS-native map annotations
+    (:mod:`geoagent.tools.kadas`). ``iface`` is typically a
+    :class:`~kadas_geoagent.kadas_iface_adapter.KadasIfaceAdapter`.
+    """
+    ctx = GeoAgentContext(
+        qgis_iface=iface,
+        qgis_project=project,
+        metadata={
+            "integration": "kadas",
+            "system_prompt": KADAS_SYSTEM_PROMPT,
+        },
+    )
+    tools, registry = assemble_tools(
+        context=ctx,
+        include_qgis=True,
+        include_geoadmin=True,
+        include_kadas=True,
         include_image_generation=True,
         extra_tools=extra_tools,
         fast=fast,
@@ -1325,6 +1459,7 @@ __all__ = [
     "for_gee_data_catalogs",
     "for_geoai",
     "for_hypercoast",
+    "for_kadas",
     "for_leafmap",
     "for_nasa_earthdata",
     "for_nasa_opera",

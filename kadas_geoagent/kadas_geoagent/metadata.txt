@@ -1,0 +1,35 @@
+[general]
+name=KADAS GeoAgent
+qgisMinimumVersion=3.28
+qgisMaximumVersion=4.99
+description=GeoAgent-powered multimodal AI chatbot for KADAS Albireo 2.
+about=KADAS GeoAgent brings the GeoAgent QGIS tool surface into a dockable
+    KADAS Albireo 2 chat interface. It reuses the shared GeoAgent core and the
+    OpenGeoAgent chat/settings dock widgets, adapting the KADAS plugin
+    interface to the QGIS iface surface GeoAgent expects.
+
+    Requirements:
+    - GeoAgent and provider clients, installable from Settings > Dependencies
+    - The shared OpenGeoAgent dock package (open_geoagent) importable on the
+      KADAS Python path
+    - KADAS Albireo 2 with Python 3.11 or newer
+version=0.1.0
+author=OpenGIS
+email=aloha@opengis.ch
+
+tags=ai, agent, kadas, qgis, geospatial, chatbot, geoagent, llm, pyqgis
+
+homepage=https://github.com/kadas-albireo/kadas-albireo2
+tracker=https://github.com/kadas-albireo/kadas-albireo2
+repository=https://github.com/kadas-albireo/kadas-albireo2
+icon=icons/icon.svg
+category=Plugins
+
+experimental=True
+deprecated=False
+
+changelog=
+    0.1.0 - Initial KADAS GeoAgent port
+        - Added KadasPluginInterface -> QGIS iface adapter
+        - Added KADAS ribbon registration for chat and settings docks
+        - Reused the shared OpenGeoAgent chat/settings dock widgets
