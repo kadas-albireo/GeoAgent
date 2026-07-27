@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-import sys
+import ast
+from pathlib import Path
 
 from geoagent.testing import MockQGISIface, MockQGISProject
+from geoagent.tools import kadas_terrain
 from geoagent.tools.kadas_terrain import kadas_terrain_tools
 
 EXPECTED = {
@@ -22,10 +24,26 @@ def _names(tools):
     return {getattr(t, "tool_name", getattr(t, "__name__", "")) for t in tools}
 
 
-def test_module_is_import_safe_without_qgis():
-    """The module must import without pulling in qgis (CI has no QGIS)."""
-    assert "geoagent.tools.kadas_terrain" in sys.modules
-    assert "qgis" not in sys.modules
+def test_module_has_no_top_level_qgis_or_kadas_import():
+    """Only tool *bodies* may import qgis/kadas; module level must stay clean.
+
+    Checked with AST rather than ``"qgis" not in sys.modules``: the plugin test
+    suite stubs a ``qgis`` package into ``sys.modules``, so a sys.modules probe
+    is order-dependent and passes or fails depending on which suites ran first.
+    The AST states the actual invariant and never skips.
+    """
+    tree = ast.parse(Path(kadas_terrain.__file__).read_text(encoding="utf-8"))
+    offenders = []
+    for node in tree.body:  # module level only -- nested imports are fine
+        if isinstance(node, ast.Import):
+            offenders += [
+                a.name for a in node.names if a.name.split(".")[0] in {"qgis", "kadas"}
+            ]
+        elif isinstance(node, ast.ImportFrom):
+            root = (node.module or "").split(".")[0]
+            if root in {"qgis", "kadas"}:
+                offenders.append(node.module or "")
+    assert not offenders, f"top-level QGIS/KADAS imports: {offenders}"
 
 
 def test_factory_returns_empty_without_a_host():
