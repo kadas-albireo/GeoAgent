@@ -280,9 +280,42 @@ def dependency_group_names() -> List[str]:
     return list(DEPENDENCY_GROUPS.keys())
 
 
+def bundled_geoagent_wheel() -> Optional[str]:
+    """Return a GeoAgent wheel shipped inside the plugin, if there is one.
+
+    Client builds bundle a wheel under ``<plugin>/bundled/`` so a fresh install
+    needs no PyPI release of GeoAgent (and works on a locked-down network for
+    the core package). Returns ``None`` for a normal source checkout, where the
+    PyPI spec is used instead.
+    """
+    bundled_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bundled")
+    try:
+        wheels = sorted(
+            f for f in os.listdir(bundled_dir) if f.lower().endswith(".whl")
+        )
+    except OSError:
+        return None
+    for name in wheels:
+        if name.lower().startswith("geoagent-"):
+            return os.path.join(bundled_dir, name)
+    return None
+
+
 def packages_for_group(group_name: str = "Core Providers") -> List[Tuple[str, str]]:
-    """Return dependency specs for one named group."""
-    return list(DEPENDENCY_GROUPS.get(group_name, REQUIRED_PACKAGES))
+    """Return dependency specs for one named group.
+
+    When a bundled GeoAgent wheel is present it replaces the PyPI spec, so the
+    shipped build installs exactly the code in the zip rather than whatever
+    version happens to be on PyPI.
+    """
+    packages = list(DEPENDENCY_GROUPS.get(group_name, REQUIRED_PACKAGES))
+    wheel = bundled_geoagent_wheel()
+    if wheel is None:
+        return packages
+    return [
+        (import_name, f"{wheel}[providers]" if import_name == "geoagent" else pip_name)
+        for import_name, pip_name in packages
+    ]
 
 
 def check_dependencies(group_name: str = "Core Providers") -> List[Dict]:
