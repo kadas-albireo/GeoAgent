@@ -227,28 +227,31 @@ def build_kadas_chat_dock_class():
             # "Training AI" telemetry panel. It lives below the stack so it sits
             # under the agent response in *either* view (simple answer pane or
             # full developer transcript). Hidden until Developer mode is active.
-            #
-            # Wrapped in a QScrollArea: the panel's minimum height (skill picker,
-            # API-docs checkbox, status combo, notes box, footer) exceeded what a
-            # short dock could give it, so the bottom rows -- including the "Log
-            # feedback" button -- were clipped with no way to reach them. A scroll
-            # area can shrink below its child's minimum and shows a scrollbar.
             self.training_panel = self._build_training_panel()
-            self.training_scroll = QScrollArea()
-            self.training_scroll.setWidget(self.training_panel)
-            self.training_scroll.setWidgetResizable(True)
-            self.training_scroll.setFrameShape(QFrame.Shape.NoFrame)
-            self.training_scroll.setHorizontalScrollBarPolicy(
+            self.training_panel.setVisible(False)
+            outer.addWidget(self.training_panel)
+
+            # Everything goes inside one scroll area.
+            #
+            # In Developer mode the stack shows the full chat dock, whose minimum
+            # height (~600px) already exceeds a typical dock. A QVBoxLayout cannot
+            # shrink a child below its minimum, so it lays the training panel out
+            # *past the bottom edge* of the dock -- the panel was positioned around
+            # y=630 in a 500px dock. Scrolling the panel itself does not help,
+            # because the panel is off-screen, not merely clipped: that is why the
+            # earlier per-panel scroll area showed no scrollbar.
+            #
+            # Scrolling the whole dock is what actually makes the bottom reachable.
+            # On a tall dock the scrollbar never appears, so nothing changes there.
+            scroll = QScrollArea()
+            scroll.setWidget(container)
+            scroll.setWidgetResizable(True)
+            scroll.setFrameShape(QFrame.Shape.NoFrame)
+            scroll.setHorizontalScrollBarPolicy(
                 _qt_value("ScrollBarPolicy", "ScrollBarAlwaysOff")
             )
-            # Floor keeps it usable when squeezed; ceiling stops it crowding out
-            # the transcript on a tall dock.
-            self.training_scroll.setMinimumHeight(90)
-            self.training_scroll.setMaximumHeight(280)
-            self.training_scroll.setVisible(False)
-            outer.addWidget(self.training_scroll)
-
-            self.setWidget(container)
+            self.dock_scroll = scroll
+            self.setWidget(scroll)
 
         def _build_training_panel(self):
             """Build the Developer-Mode "Training AI" feedback section."""
@@ -384,10 +387,8 @@ def build_kadas_chat_dock_class():
             self.mode_stack.setCurrentIndex(1 if developer else 0)
             self.mode_toggle.setText("User mode" if developer else "Developer mode")
             # The Training AI telemetry section is a developer-mode affordance.
-            # Toggle the scroll wrapper, not the panel: the panel is the scroll
-            # area's child, so hiding it would leave an empty scroll area behind.
-            if getattr(self, "training_scroll", None) is not None:
-                self.training_scroll.setVisible(bool(developer))
+            if getattr(self, "training_panel", None) is not None:
+                self.training_panel.setVisible(bool(developer))
             if not developer:
                 self._sync_user_view()
 
