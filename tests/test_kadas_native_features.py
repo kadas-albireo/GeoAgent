@@ -208,5 +208,23 @@ def test_for_kadas_exposes_native_tools(tmp_path):
     } <= names
     # Native KADAS command bridge (findAction-based).
     assert {"list_kadas_actions", "trigger_kadas_action"} <= names
+    # KADAS-native GPX waypoints/routes, custom SVG and item tooltips: these have
+    # dedicated item classes, so the agent must not fall back to plain markers.
+    assert {
+        "add_gpx_waypoint",
+        "add_gpx_route",
+        "add_svg_marker",
+        "set_annotation_tooltip",
+    } <= names
+    # Terrain analysis + non-interactive measurement.
+    assert {
+        "set_heightmap_layer",
+        "get_heightmap_layer",
+        "compute_hillshade",
+        "compute_slope",
+        "compute_viewshed",
+        "measure_distance_bearing",
+        "measure_polygon_area",
+    } <= names
     # Headless project primitives (no run_pyqgis_script needed).
     assert {"new_project", "open_project", "save_project"} <= names

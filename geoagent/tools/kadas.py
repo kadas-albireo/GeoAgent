@@ -208,6 +208,222 @@ def kadas_tools(iface: Any = None, project: Optional[Any] = None) -> list[Any]:
             pass
 
     @geo_tool(category="kadas", available_in=("full", "fast"))
+    def add_gpx_waypoint(
+        lon: float,
+        lat: float,
+        name: Optional[str] = None,
+        color: str = "#d43b3b",
+        size: float = 3.0,
+        label_color: str = "#000000",
+    ) -> dict[str, Any]:
+        """Place a KADAS-native GPX waypoint at a WGS84 coordinate.
+
+        Use this (not a generic marker) whenever the user asks for a *waypoint*:
+        it creates KADAS' own ``KadasGpxWaypointAnnotationItem``, which carries a
+        name and renders as a GPX waypoint rather than a plain annotation.
+
+        Args:
+            lon: Longitude (WGS84).
+            lat: Latitude (WGS84).
+            name: Waypoint name, rendered as its label.
+            color: Marker colour as ``"#rrggbb"`` or a colour name.
+            size: Marker size in millimetres.
+            label_color: Label text colour.
+
+        Returns:
+            ``{"success", "lon", "lat", "name"}`` or a structured error.
+        """
+
+        def _run() -> dict[str, Any]:
+            try:
+                from kadas.kadasgui import (  # type: ignore[import-not-found]
+                    KadasGpxWaypointAnnotationItem,
+                )
+                from qgis.core import (  # type: ignore[import-not-found]
+                    QgsMarkerSymbol,
+                    QgsPoint,
+                )
+                from qgis.PyQt.QtGui import QColor  # type: ignore[import-not-found]
+
+                layer = _get_or_create_layer()
+                x, y = _to_layer_xy(lon, lat)
+                item = KadasGpxWaypointAnnotationItem(QgsPoint(x, y))
+                if name:
+                    item.setName(str(name))
+                item.setLabelColor(QColor(str(label_color)))
+                item.setSymbol(
+                    QgsMarkerSymbol.createSimple(
+                        {"color": str(color), "size": str(float(size))}
+                    )
+                )
+                layer.addItem(item)
+                _refresh()
+            except Exception as exc:
+                return {"success": False, "error": f"{type(exc).__name__}: {exc}"}
+            return {"success": True, "lon": lon, "lat": lat, "name": name}
+
+        return _on_gui(_run)
+
+    @geo_tool(category="kadas", available_in=("full", "fast"))
+    def add_gpx_route(
+        coordinates: list[list[float]],
+        name: Optional[str] = None,
+        number: Optional[str] = None,
+        color: str = "#d43b3b",
+        width: float = 0.8,
+        label_color: str = "#000000",
+    ) -> dict[str, Any]:
+        """Draw a KADAS-native GPX route through a list of WGS84 ``[lon, lat]`` points.
+
+        Use this (not a polygon or a generic line) whenever the user asks for a
+        *route* or *track*: it creates KADAS' own ``KadasGpxRouteAnnotationItem``,
+        which carries a name and route number.
+
+        Args:
+            coordinates: Ordered ``[[lon, lat], ...]`` points (WGS84), at least 2.
+            name: Route name, rendered as its label.
+            number: Route number (GPX ``<number>``).
+            color: Line colour as ``"#rrggbb"`` or a colour name.
+            width: Line width in millimetres.
+            label_color: Label text colour.
+
+        Returns:
+            ``{"success", "points", "name"}`` or a structured error.
+        """
+
+        def _run() -> dict[str, Any]:
+            try:
+                from kadas.kadasgui import (  # type: ignore[import-not-found]
+                    KadasGpxRouteAnnotationItem,
+                )
+                from qgis.core import (  # type: ignore[import-not-found]
+                    QgsLineString,
+                    QgsLineSymbol,
+                    QgsPoint,
+                )
+                from qgis.PyQt.QtGui import QColor  # type: ignore[import-not-found]
+
+                lonlat = [
+                    (float(p[0]), float(p[1])) for p in coordinates if len(p) >= 2
+                ]
+                if len(lonlat) < 2:
+                    return {
+                        "success": False,
+                        "error": "A route needs at least 2 points.",
+                    }
+                pts = [_to_layer_xy(lon, lat) for lon, lat in lonlat]
+                curve = QgsLineString([QgsPoint(x, y) for x, y in pts])
+
+                layer = _get_or_create_layer()
+                item = KadasGpxRouteAnnotationItem(curve)
+                if name:
+                    item.setName(str(name))
+                if number:
+                    item.setNumber(str(number))
+                item.setLabelColor(QColor(str(label_color)))
+                item.setSymbol(
+                    QgsLineSymbol.createSimple(
+                        {"color": str(color), "width": str(float(width))}
+                    )
+                )
+                layer.addItem(item)
+                _refresh()
+            except Exception as exc:
+                return {"success": False, "error": f"{type(exc).__name__}: {exc}"}
+            return {"success": True, "points": len(pts), "name": name}
+
+        return _on_gui(_run)
+
+    @geo_tool(category="kadas", available_in=("full", "fast"))
+    def add_svg_marker(
+        lon: float, lat: float, svg_path: str, size: float = 8.0
+    ) -> dict[str, Any]:
+        """Place a custom SVG symbol on the map at a WGS84 coordinate.
+
+        KADAS' own ``KadasSvgMarkerAnnotationItem`` (the Draw tab's "Custom SVG")
+        is **not exposed to Python**, so this builds the equivalent with QGIS'
+        stock ``QgsSvgMarkerSymbolLayer`` on a marker annotation. Visually and
+        functionally equivalent; it is simply not the KADAS parametric subclass.
+
+        Args:
+            lon: Longitude (WGS84).
+            lat: Latitude (WGS84).
+            svg_path: Path to an ``.svg`` file, or a QGIS SVG library name.
+            size: Symbol size in millimetres.
+
+        Returns:
+            ``{"success", "lon", "lat", "svg_path"}`` or a structured error.
+        """
+
+        def _run() -> dict[str, Any]:
+            try:
+                from qgis.core import (  # type: ignore[import-not-found]
+                    QgsAnnotationMarkerItem,
+                    QgsMarkerSymbol,
+                    QgsPoint,
+                    QgsSvgMarkerSymbolLayer,
+                )
+
+                layer = _get_or_create_layer()
+                x, y = _to_layer_xy(lon, lat)
+                item = QgsAnnotationMarkerItem(QgsPoint(x, y))
+                svg_layer = QgsSvgMarkerSymbolLayer(str(svg_path), float(size))
+                symbol = QgsMarkerSymbol()
+                symbol.changeSymbolLayer(0, svg_layer)
+                item.setSymbol(symbol)
+                layer.addItem(item)
+                _refresh()
+            except Exception as exc:
+                return {"success": False, "error": f"{type(exc).__name__}: {exc}"}
+            return {
+                "success": True,
+                "lon": lon,
+                "lat": lat,
+                "svg_path": str(svg_path),
+            }
+
+        return _on_gui(_run)
+
+    @geo_tool(category="kadas", available_in=("full", "fast"))
+    def set_annotation_tooltip(item_id: str, tooltip: str) -> dict[str, Any]:
+        """Attach a hover tooltip (an annotation) to an existing map item.
+
+        This is the "annotate" step distinct from placing text: the label is drawn
+        on the map, whereas a tooltip is metadata KADAS shows on hover. Uses
+        ``KadasAnnotationLayerHelpers.setTooltip``. Get ``item_id`` from
+        ``get_kadas_layer_items``.
+
+        Args:
+            item_id: Id of an item on the ``GeoAgent Annotations`` layer.
+            tooltip: Tooltip text; an empty string removes it.
+
+        Returns:
+            ``{"success", "item_id"}`` or a structured error.
+        """
+
+        def _run() -> dict[str, Any]:
+            try:
+                from kadas.kadasgui import (  # type: ignore[import-not-found]
+                    KadasAnnotationLayerHelpers,
+                )
+
+                layer = _get_or_create_layer()
+                if str(item_id) not in layer.items():
+                    return {
+                        "success": False,
+                        "error": f"No item {item_id!r} on {ANNOTATION_LAYER_NAME}.",
+                    }
+                KadasAnnotationLayerHelpers.setTooltip(
+                    layer, str(item_id), str(tooltip)
+                )
+                _refresh()
+            except Exception as exc:
+                return {"success": False, "error": f"{type(exc).__name__}: {exc}"}
+            return {"success": True, "item_id": str(item_id)}
+
+        return _on_gui(_run)
+
+    @geo_tool(category="kadas", available_in=("full", "fast"))
     def add_map_marker(
         lon: float, lat: float, label: Optional[str] = None
     ) -> dict[str, Any]:
@@ -913,6 +1129,10 @@ def kadas_tools(iface: Any = None, project: Optional[Any] = None) -> list[Any]:
         add_map_circle,
         add_map_rectangle,
         add_map_polygon,
+        add_gpx_waypoint,
+        add_gpx_route,
+        add_svg_marker,
+        set_annotation_tooltip,
         clear_annotations,
         list_kadas_annotation_layers,
         get_kadas_layer_items,
