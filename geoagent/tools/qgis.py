@@ -1280,7 +1280,12 @@ def qgis_tools(iface: Any, project: Optional[Any] = None) -> list[Any]:
         raster_min: Optional[float] = None,
         raster_max: Optional[float] = None,
     ) -> dict[str, Any]:
-        """Change simple layer symbology such as color and line width.
+        """Restyle a vector OR raster layer (colour, width, opacity, colour ramp).
+
+        Works on **both** layer types -- do not tell the user raster symbology is
+        unsupported. For a raster, pass ``raster_palette`` (and optionally
+        ``raster_min``/``raster_max``) to apply a single-band pseudocolour ramp;
+        ``opacity`` applies to either type.
 
         Args:
             layer_name: Display name of the target QGIS layer.

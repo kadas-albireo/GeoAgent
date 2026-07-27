@@ -64,13 +64,31 @@ when you need it, arrives via the injected API reference (see Reference).
 - Marker with label: `add_map_marker` (label is an argument - do not add a separate
   `add_text_annotation` for it). Standalone text: `add_text_annotation`.
 - Shapes: `add_map_circle` (`radius_m`), `add_map_rectangle`, `add_map_polygon`.
+- **Waypoints & routes**: use `add_gpx_waypoint` / `add_gpx_route` (KADAS-native GPX
+  items with `name`/`number`). Do NOT fall back to a plain marker or polygon for these.
+- Custom SVG symbol: `add_svg_marker(svg_path)`.
+- Tooltip on an existing item ("annotate" as opposed to placing text):
+  `set_annotation_tooltip(item_id, tooltip)`; get ids from `get_kadas_layer_items`.
 - Manage: `list_kadas_annotation_layers`, `get_kadas_layer_items`, `clear_annotations`
   (removes all; no selective undo - only if asked).
 
-**Terrain**
-- Elevation at a point: `get_elevation_at`. Line of sight: `check_line_of_sight`
-  (resolve + convert endpoints first). Hillshade: load a DTM (`load_geoadmin_layer`) ->
-  `create_hillshade_layer`.
+**Measurement (non-interactive; KADAS' measure tools need a human click)**
+- Distance + azimuth: `measure_distance_bearing` (returns metres, degrees and NATO mils).
+- Area + perimeter: `measure_polygon_area`. These match KADAS' own measure tool exactly
+  (both use `QgsDistanceArea`).
+
+**Terrain** (all need a heightmap; set it once with `set_heightmap_layer`)
+- `set_heightmap_layer(layer_name)` / `get_heightmap_layer` - the DTM every terrain tool
+  reads. Do this first; without it the others return "No heightmap is set".
+- Elevation at a point: `get_elevation_at`. Line of sight: `check_line_of_sight`.
+- KADAS-native rasters: `compute_hillshade`, `compute_slope`, `compute_viewshed`
+  (these run KADAS' own filters; slow on a full DTM, and confirmation-gated).
+- `create_hillshade_layer` is the generic GDAL fallback for a non-KADAS raster.
+
+**Raster styling (supported - do not refuse)**
+- `set_layer_symbology` restyles **rasters as well as vectors**: pass `raster_palette`
+  (e.g. "terrain", "viridis", "grayscale") with optional `raster_min`/`raster_max`,
+  and `opacity` for either type.
 
 **OSM features**
 - `query_osm_features` (Overpass) - returns and can add features; usually no separate
