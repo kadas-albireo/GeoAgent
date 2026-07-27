@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Any
 
 from geoagent.core.config import GeoAgentConfig, ProviderName
@@ -200,6 +201,84 @@ def resolve_model(config: GeoAgentConfig | None = None, **overrides: Any) -> Any
             client_args=client_args or None,
             model_id=model_id,
             params=params,
+        )
+
+    if provider == "lmstudio":
+        from strands.models.litellm import LiteLLMModel
+
+        from geoagent.core.lmstudio import (
+            DEFAULT_BASE_URL,
+            PLACEHOLDER_API_KEY,
+            ensure_model,
+        )
+
+        # The user picks a plain model key ("qwen2.5-7b-instruct"); LiteLLM needs an
+        # "openai/" routing prefix to know which dialect to speak. Accept either and
+        # normalize, so a pasted LITELLM_MODEL value does not become "openai/openai/...".
+        #
+        # Blank is the *normal* case from the plugin dropdown and means "whatever LM
+        # Studio has loaded" -- not a hardcoded default, which would fail for every user
+        # who happens to have a different model downloaded.
+        model_key = (cfg.model or "").strip()
+        if model_key.startswith("openai/"):
+            model_key = model_key[len("openai/") :]
+
+        # Deliberately NOT cfg.litellm_base_url: this provider starts a *local* server,
+        # so inheriting someone's remote LiteLLM proxy URL would load a model on this
+        # machine while sending requests to a different host.
+        base_url = cfg.lmstudio_base_url or DEFAULT_BASE_URL
+
+        # Start the server and load the model if needed. Side-effectful, deliberately:
+        # it mirrors the openai-codex branch above, which calls
+        # ensure_openai_codex_environment() here for the same reason -- the point of
+        # picking this provider is "make the local model work without me setting it up".
+        # Callers construct agents on a worker thread (the plugin's ChatWorker), so the
+        # seconds this can take do not block a GUI thread.
+        #
+        # Take the model id back from ensure_model rather than re-deriving it: when
+        # model_key was blank, ensure_model is the thing that decided which model this is.
+        prepared = ensure_model(model_key or None, base_url=base_url)
+
+        client_args = dict(cfg.client_args)
+        client_args.setdefault("api_key", PLACEHOLDER_API_KEY)
+        client_args.setdefault("base_url", base_url)
+
+        model_id = str(prepared.model)
+        params = _token_param("max_tokens", cfg.max_tokens)
+        if not _model_uses_default_temperature_only(model_id):
+            params["temperature"] = cfg.temperature
+        return LiteLLMModel(
+            client_args=client_args,
+            model_id=model_id,
+            params=params,
+        )
+
+    if provider == "eth-cluster":
+        from strands.models.ollama import OllamaModel
+
+        from geoagent.core.eth_cluster import ensure_tunnel, load_config
+
+        # The open-source model on the ETH Slurm GPU node. There is no bespoke client:
+        # the SSH local-forward makes the remote ollama server answer on localhost, so
+        # once the tunnel is up this is exactly the ollama provider. ensure_tunnel() is
+        # the side effect that earns this its own provider name, mirroring the lmstudio
+        # branch above -- selecting it should just work, not require a separate ritual.
+        eth_config = load_config(
+            Path(os.path.expanduser(cfg.eth_config_path))
+            if cfg.eth_config_path
+            else None
+        )
+        ensure_tunnel(eth_config)
+
+        model_id = cfg.model or eth_config.ollama_model
+        kwargs = {}
+        if cfg.max_tokens is not None:
+            kwargs["max_tokens"] = int(cfg.max_tokens)
+        return OllamaModel(
+            eth_config.base_url,
+            model_id=model_id,
+            temperature=cfg.temperature,
+            **kwargs,
         )
 
     if provider == "openrouter":
