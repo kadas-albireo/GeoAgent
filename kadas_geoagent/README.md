@@ -45,6 +45,19 @@ The shared dock widgets were verified to call only `activeLayer`,
 provided by the adapter.
 
 
+## Logging
+
+Every agent turn can be recorded as a replayable trace.
+
+**Enable it:** switch the chat dock to **Developer mode**. Full LLM trace logging is
+implied by Developer mode; there is no separate toggle.
+
+**Where:** one JSONL file (one JSON object per line) at
+`~/.kadas/agent_execution.log` (override the directory with `$GEOAGENT_LOG_DIR`).
+Tail it live with `tail -f ~/.kadas/agent_execution.log`, or use the dock's
+**Logs** button to open the folder.
+
+
 ## Kadas Port Plugin
 
 - `geoagent/__init__.py`
@@ -103,8 +116,9 @@ provided by the adapter.
             - A common pattern is search_location -> add_map_marker to pin a named place.
             
             Reading KADAS-native layers (Pins, GPX, annotations):
-            - These are KadasItemLayer plugin layers holding drawable items, not QGIS vector
-              features, so list_project_layers only sees their extent/bounding box. To
+            - These are QgsAnnotationLayer layers holding drawable KADAS annotation items,
+              not QGIS vector features, so list_project_layers only sees their extent/
+              bounding box. To
               understand their contents — including each item's coordinates — call
               list_kadas_item_layers to discover them, then get_kadas_layer_items(layer_name)
               to read every item's type, label, and WGS84 lon/lat. Do not report only a

@@ -104,47 +104,53 @@ class KadasGeoAgent(QObject):
     # -- Chat dock -------------------------------------------------------
 
     def toggle_chat_dock(self):
-        """Show, create, or hide the shared OpenGeoAgent chat dock."""
+        """Show, create, or hide the chat dock (hides settings when shown)."""
         if self._dependencies_missing():
             self._show_settings_dock(dependencies_tab=True)
-            if self.chat_action is not None:
-                self.chat_action.setChecked(False)
             self._warn(
                 "Install missing dependencies before opening the chat panel."
             )
             return
 
+        # Already open: clicking the ribbon entry again closes it.
+        if self._chat_dock is not None and self._chat_dock.isVisible():
+            self._chat_dock.hide()
+            self._set_checked(self.chat_action, False)
+            return
+
         if self._chat_dock is None:
             widget_cls = self._user_chat_dock_class()
             if widget_cls is None:
-                if self.chat_action is not None:
-                    self.chat_action.setChecked(False)
+                self._set_checked(self.chat_action, False)
                 return
             self._chat_dock = widget_cls(self.iface, self.kadas_iface.mainWindow())
             self._chat_dock.setObjectName("KadasGeoAgentChatDock")
             self._add_dock(self._chat_dock)
-            self._chat_dock.show()
-            self._chat_dock.raise_()
-            return
 
-        self._toggle_visibility(self._chat_dock)
+        self._show_exclusive(
+            self._chat_dock,
+            self.chat_action,
+            self._settings_dock,
+            self.settings_action,
+        )
 
     # -- Settings dock ---------------------------------------------------
 
     def toggle_settings_dock(self):
-        """Toggle the shared OpenGeoAgent settings dock."""
-        if self._settings_dock is None:
-            self._show_settings_dock()
+        """Toggle the settings dock (hides chat when shown)."""
+        # Already open: clicking the ribbon entry again closes it.
+        if self._settings_dock is not None and self._settings_dock.isVisible():
+            self._settings_dock.hide()
+            self._set_checked(self.settings_action, False)
             return
-        self._toggle_visibility(self._settings_dock)
+        self._show_settings_dock()
 
     def _show_settings_dock(self, dependencies_tab=False):
-        """Ensure the settings dock exists and is visible."""
+        """Ensure the settings dock exists and is the only visible panel."""
         if self._settings_dock is None:
             widget_cls = self._import_dock("settings_dock", "SettingsDockWidget")
             if widget_cls is None:
-                if self.settings_action is not None:
-                    self.settings_action.setChecked(False)
+                self._set_checked(self.settings_action, False)
                 return
             self._settings_dock = widget_cls(
                 self.iface, self.kadas_iface.mainWindow()
@@ -152,10 +158,12 @@ class KadasGeoAgent(QObject):
             self._settings_dock.setObjectName("KadasGeoAgentSettingsDock")
             self._add_dock(self._settings_dock)
 
-        self._settings_dock.show()
-        self._settings_dock.raise_()
-        if self.settings_action is not None:
-            self.settings_action.setChecked(True)
+        self._show_exclusive(
+            self._settings_dock,
+            self.settings_action,
+            self._chat_dock,
+            self.chat_action,
+        )
         if dependencies_tab and hasattr(
             self._settings_dock, "show_dependencies_tab"
         ):
@@ -186,14 +194,25 @@ class KadasGeoAgent(QObject):
             pass  # nosec B110
         dock.deleteLater()
 
+    def _show_exclusive(self, dock, action, other_dock, other_action):
+        """Show ``dock`` as the only visible panel, hiding its sibling.
+
+        Both docks share the right dock area, so showing them together makes
+        KADAS tabify/overlap them and the ribbon checkmarks drift out of sync.
+        Keeping exactly one visible avoids that.
+        """
+        if other_dock is not None and other_dock is not dock:
+            other_dock.hide()
+        self._set_checked(other_action, False)
+        dock.show()
+        dock.raise_()
+        self._set_checked(action, True)
+
     @staticmethod
-    def _toggle_visibility(widget):
-        """Hide a visible widget, otherwise show and raise it."""
-        if widget.isVisible():
-            widget.hide()
-        else:
-            widget.show()
-            widget.raise_()
+    def _set_checked(action, checked):
+        """Sync a checkable ribbon action's state with dock visibility."""
+        if action is not None:
+            action.setChecked(checked)
 
     def _dependencies_missing(self):
         """Return True when the shared package or its deps are unavailable."""

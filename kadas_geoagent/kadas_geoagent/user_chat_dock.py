@@ -131,10 +131,16 @@ def build_kadas_chat_dock_class():
         return _CACHED_CLASS
 
     from qgis.PyQt.QtWidgets import (
+        QCheckBox,
+        QComboBox,
+        QFileDialog,
+        QFrame,
         QHBoxLayout,
         QLabel,
+        QLineEdit,
         QListWidget,
         QListWidgetItem,
+        QPlainTextEdit,
         QPushButton,
         QStackedWidget,
         QTextBrowser,
@@ -149,6 +155,8 @@ def build_kadas_chat_dock_class():
         _qt_value,
     )
 
+    from geoagent.core.telemetry import FEEDBACK_STATUSES, FeedbackLogger
+
     class KadasChatDockWidget(ChatDockWidget):
         """Shared chat dock with a minimal KADAS "user mode" front end."""
 
@@ -160,9 +168,17 @@ def build_kadas_chat_dock_class():
             self._user_ready = False
             self._user_selected_index = None
             self._user_follow_latest = True
+            # Telemetry sink for the Developer-Mode "Training AI" feedback.
+            self._feedback_logger = FeedbackLogger()
+            # Path of a Markdown skill file to "upskill" the agent with.
+            self._skill_file_path = ""
+            # Whether to retrieve the real KADAS API reference for each question.
+            self._api_docs_enabled = False
             super().__init__(iface, parent)
             self.setWindowTitle("KADAS GeoAgent")
             self._build_user_mode_ui()
+            self._restore_skill_file()
+            self._restore_api_docs_pref()
             self._user_ready = True
             # Per product decision: always open in the simple user mode.
             self._set_developer_mode(False)
@@ -173,6 +189,13 @@ def build_kadas_chat_dock_class():
         def _build_user_mode_ui(self):
             """Wrap the developer widget and a new user page in a stack."""
             developer_widget = self.widget()
+
+            # KADAS already gates User/Developer with the header button below, so the
+            # base dock's own Mode selector would be a second, redundant developer
+            # switch nested inside developer mode. Pin it to Developer and hide it.
+            self.ui_mode_combo.setCurrentText("Developer")
+            self.ui_mode_combo.hide()
+            self.ui_mode_label.hide()
 
             container = QWidget()
             outer = QVBoxLayout(container)
@@ -197,10 +220,103 @@ def build_kadas_chat_dock_class():
 
             self.mode_stack = QStackedWidget()
             self.mode_stack.addWidget(self._build_user_page())  # index 0: user
-            self.mode_stack.addWidget(developer_widget)         # index 1: dev
+            self.mode_stack.addWidget(developer_widget)  # index 1: dev
             outer.addWidget(self.mode_stack, 1)
 
+            # "Training AI" telemetry panel. It lives below the stack so it sits
+            # under the agent response in *either* view (simple answer pane or
+            # full developer transcript). Hidden until Developer mode is active.
+            self.training_panel = self._build_training_panel()
+            self.training_panel.setVisible(False)
+            outer.addWidget(self.training_panel)
+
             self.setWidget(container)
+
+        def _build_training_panel(self):
+            """Build the Developer-Mode "Training AI" feedback section."""
+            panel = QFrame()
+            panel.setFrameShape(QFrame.Shape.StyledPanel)
+            layout = QVBoxLayout(panel)
+            layout.setContentsMargins(8, 6, 8, 6)
+            layout.setSpacing(4)
+
+            heading = QLabel("Training AI")
+            heading.setStyleSheet("font-weight: 600;")
+            layout.addWidget(heading)
+
+            hint = QLabel(
+                "Rate the answer above and add notes; feedback is logged for "
+                "training."
+            )
+            hint.setStyleSheet("color: gray; font-size: 10px;")
+            hint.setWordWrap(True)
+            layout.addWidget(hint)
+
+            # Upskill-with-a-file selector: pick a Markdown skill/bundle file
+            # whose content is injected into the agent's system context.
+            skill_row = QHBoxLayout()
+            skill_row.addWidget(QLabel("Upskill with:"))
+            self.skill_file_edit = QLineEdit()
+            self.skill_file_edit.setReadOnly(True)
+            self.skill_file_edit.setPlaceholderText("No skill file selected")
+            self.skill_file_edit.setToolTip(
+                "A Markdown file (e.g. a SKILL.md or skills_prompt.md) whose "
+                "contents are prepended to each request as extra guidance."
+            )
+            skill_row.addWidget(self.skill_file_edit, 1)
+            self.skill_browse_btn = QPushButton("Browse…")
+            self.skill_browse_btn.clicked.connect(self._browse_skill_file)
+            skill_row.addWidget(self.skill_browse_btn)
+            self.skill_clear_btn = QPushButton("Clear")
+            self.skill_clear_btn.clicked.connect(self._clear_skill_file)
+            skill_row.addWidget(self.skill_clear_btn)
+            layout.addLayout(skill_row)
+
+            # Auto-inject the real KADAS Python API for the current question.
+            # Off by default: it is a context/latency trade, and the point of the
+            # benchmarks is to measure whether it helps rather than assume it.
+            self.api_docs_check = QCheckBox(
+                "Include KADAS API reference for the question"
+            )
+            self.api_docs_check.setToolTip(
+                "Look up the relevant KADAS API (generated from its SIP bindings) by "
+                "keyword and add it to each request, so the model uses real signatures "
+                "instead of guessing.\n\n"
+                "Adds roughly 1-3k tokens to the turn it matches."
+            )
+            self.api_docs_check.toggled.connect(self._set_api_docs_enabled)
+            layout.addWidget(self.api_docs_check)
+
+            status_row = QHBoxLayout()
+            status_row.addWidget(QLabel("Status:"))
+            self.training_status = QComboBox()
+            # Order matches FEEDBACK_STATUSES; default to Unclassified.
+            for value in FEEDBACK_STATUSES:
+                self.training_status.addItem(value.capitalize(), value)
+            self.training_status.setCurrentIndex(
+                list(FEEDBACK_STATUSES).index("unclassified")
+            )
+            status_row.addWidget(self.training_status, 1)
+            layout.addLayout(status_row)
+
+            self.training_feedback = QPlainTextEdit()
+            self.training_feedback.setPlaceholderText(
+                "What was good or wrong about this answer? (optional)"
+            )
+            self.training_feedback.setMaximumHeight(60)
+            layout.addWidget(self.training_feedback)
+
+            footer = QHBoxLayout()
+            self.training_status_label = QLabel("")
+            self.training_status_label.setStyleSheet("color: gray; font-size: 10px;")
+            self.training_status_label.setWordWrap(True)
+            footer.addWidget(self.training_status_label, 1)
+            self.training_log_btn = QPushButton("Log feedback")
+            self.training_log_btn.clicked.connect(self._log_training_feedback)
+            footer.addWidget(self.training_log_btn)
+            layout.addLayout(footer)
+
+            return panel
 
         def _build_user_page(self):
             """Build the minimal user-mode page: history, answer, ask box."""
@@ -214,9 +330,7 @@ def build_kadas_chat_dock_class():
 
             self.user_history_list = QListWidget()
             self.user_history_list.setMaximumHeight(90)
-            self.user_history_list.itemClicked.connect(
-                self._on_user_history_clicked
-            )
+            self.user_history_list.itemClicked.connect(self._on_user_history_clicked)
             layout.addWidget(self.user_history_list)
 
             self.user_output = QTextBrowser()
@@ -250,11 +364,197 @@ def build_kadas_chat_dock_class():
         def _set_developer_mode(self, developer):
             """Show the developer (True) or user (False) page."""
             self.mode_stack.setCurrentIndex(1 if developer else 0)
-            self.mode_toggle.setText(
-                "User mode" if developer else "Developer mode"
-            )
+            self.mode_toggle.setText("User mode" if developer else "Developer mode")
+            # The Training AI telemetry section is a developer-mode affordance.
+            if getattr(self, "training_panel", None) is not None:
+                self.training_panel.setVisible(bool(developer))
             if not developer:
                 self._sync_user_view()
+
+        # -- Training AI telemetry --------------------------------------------
+
+        def _current_exchange(self):
+            """Return the exchange the training feedback applies to, or None."""
+            exchanges = _exchanges_from_messages(self._messages)
+            if not exchanges:
+                return None
+            if self._user_selected_index is not None:
+                for exchange in exchanges:
+                    if exchange["prompt_index"] == self._user_selected_index:
+                        return exchange
+            return exchanges[-1]
+
+        def _log_training_feedback(self):
+            """Record the Training AI feedback for the current exchange."""
+            exchange = self._current_exchange()
+            if exchange is None:
+                self.training_status_label.setText(
+                    "Ask a question first — there is no answer to rate yet."
+                )
+                return
+            status = self.training_status.currentData()
+            notes = self.training_feedback.toPlainText().strip()
+            extra = {}
+            try:
+                # Best-effort provenance so feedback is attributable to a run.
+                extra["provider"] = self._qt_setting_provider()
+            except Exception:
+                pass
+            event = self._feedback_logger.record_feedback(
+                status=status,
+                feedback=notes,
+                question=exchange.get("question", ""),
+                answer=exchange.get("answer", ""),
+                integration="kadas",
+                **extra,
+            )
+            self.training_feedback.clear()
+            self.training_status.setCurrentIndex(
+                list(FEEDBACK_STATUSES).index("unclassified")
+            )
+            self.training_status_label.setText(
+                "Logged “{status}” feedback to {path}".format(
+                    status=event.get("status", "unclassified"),
+                    path=self._feedback_logger.log_path,
+                )
+            )
+
+        def _qt_setting_provider(self):
+            """Return the configured provider name for feedback provenance."""
+            from qgis.PyQt.QtCore import QSettings
+
+            settings = QSettings()
+            value = settings.value(KADAS_SETTINGS_PREFIX + "provider", "")
+            return str(value or "")
+
+        # -- Upskill-with-a-file ----------------------------------------------
+
+        _SKILL_FILE_SETTING = KADAS_SETTINGS_PREFIX + "skill_file"
+
+        def _restore_skill_file(self):
+            """Load the persisted skill-file selection into the UI."""
+            from qgis.PyQt.QtCore import QSettings
+
+            path = str(QSettings().value(self._SKILL_FILE_SETTING, "") or "")
+            self._set_skill_file(path, persist=False)
+
+        def _set_skill_file(self, path, persist=True):
+            """Record the selected skill file and reflect it in the UI."""
+            from qgis.PyQt.QtCore import QSettings
+
+            self._skill_file_path = str(path or "")
+            if getattr(self, "skill_file_edit", None) is not None:
+                self.skill_file_edit.setText(self._skill_file_path)
+            if persist:
+                QSettings().setValue(self._SKILL_FILE_SETTING, self._skill_file_path)
+
+        def _browse_skill_file(self):
+            """Prompt for a Markdown skill file to upskill the agent with."""
+            import os
+
+            start_dir = ""
+            if self._skill_file_path:
+                start_dir = os.path.dirname(self._skill_file_path)
+            path, _filter = QFileDialog.getOpenFileName(
+                self,
+                "Select skill file",
+                start_dir,
+                "Markdown files (*.md *.markdown);;All files (*)",
+            )
+            if path:
+                self._set_skill_file(path)
+
+        def _clear_skill_file(self):
+            """Clear the selected skill file."""
+            self._set_skill_file("")
+
+        def _selected_skill_text(self):
+            """Return the trimmed contents of the selected skill file, or ''.
+
+            Read fresh on each turn so edits to the file take effect without
+            reselecting it. Unreadable/oversized files degrade to ''.
+            """
+            import os
+
+            path = self._skill_file_path
+            if not path or not os.path.isfile(path):
+                return ""
+            try:
+                with open(path, encoding="utf-8") as handle:
+                    text = handle.read(200_000)
+            except OSError:
+                return ""
+            return text.strip()
+
+        _API_DOCS_SETTING = KADAS_SETTINGS_PREFIX + "inject_api_docs"
+
+        def _restore_api_docs_pref(self):
+            """Load the persisted 'include API reference' toggle into the UI."""
+            from qgis.PyQt.QtCore import QSettings
+
+            enabled = QSettings().value(self._API_DOCS_SETTING, False, type=bool)
+            self._api_docs_enabled = bool(enabled)
+            if getattr(self, "api_docs_check", None) is not None:
+                self.api_docs_check.setChecked(self._api_docs_enabled)
+
+        def _set_api_docs_enabled(self, enabled):
+            """Persist the toggle so it survives a restart."""
+            from qgis.PyQt.QtCore import QSettings
+
+            self._api_docs_enabled = bool(enabled)
+            QSettings().setValue(self._API_DOCS_SETTING, self._api_docs_enabled)
+
+        def _api_docs_text(self, prompt):
+            """Return KADAS API reference relevant to *prompt*, or ''.
+
+            Retrieved fresh per turn by keyword, so only the API the question is about is
+            paid for. Degrades to '' if geoagent is too old to ship the packs.
+            """
+            if not getattr(self, "_api_docs_enabled", False):
+                return ""
+            try:
+                from geoagent.core.context_docs import build_context_block
+            except ImportError:
+                return ""
+            try:
+                return build_context_block(prompt)
+            except OSError:
+                return ""
+
+        def _build_prompt_with_context(self, prompt):
+            """Prepend the skill file and (optionally) the KADAS API reference.
+
+            Extends the shared dock's context builder so a chosen SKILL.md /
+            skills_prompt.md becomes extra guidance for the turn — the "upskill"
+            step surfaced in the UI — and so the "Include KADAS API reference"
+            toggle adds the real signatures for whatever was asked.
+
+            Both go into the **user message**, never the system prompt. The system
+            prompt plus the tool definitions form a byte-stable prefix that llama.cpp
+            caches: re-sending an identical ~16k prefix to a local qwen2.5-7b costs
+            ~0.5s, while changing it costs 13-22s because the whole prefix must be
+            reprefilled. This guidance varies per question, so putting it in the system
+            prompt would destroy that cache on every turn.
+
+            The raw ``prompt`` (not the composed history) drives retrieval: matching
+            triggers against the transcript would keep firing on whatever was discussed
+            several turns ago.
+            """
+            composed = super()._build_prompt_with_context(prompt)
+
+            api_docs = self._api_docs_text(prompt)
+            if api_docs:
+                composed = f"{api_docs}\n{composed}"
+
+            skill_text = self._selected_skill_text()
+            if not skill_text:
+                return composed
+            return (
+                "Apply the following learned skills when relevant to the "
+                "request.\n\n"
+                f"--- BEGIN SKILLS ---\n{skill_text}\n--- END SKILLS ---\n\n"
+                f"{composed}"
+            )
 
         # -- User actions -----------------------------------------------------
 
