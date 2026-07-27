@@ -122,6 +122,24 @@ Quote the git commit above when reporting a problem.
 EOF
 ok "provenance stamped (${GIT_COMMIT}${GIT_DIRTY})"
 
+# 6. Build provenance ----------------------------------------------------------
+# Support's first question is always "which build are you running?". Stamping the
+# commit into the zip answers it without guesswork, and the dirty flag makes an
+# unreproducible build obvious rather than silent.
+[ -n "$DIRTY_SUFFIX" ] && \
+  warn "building from a DIRTY working tree - this build is not reproducible"
+cat > "$PKG/BUILD_INFO.txt" <<EOF
+KADAS GeoAgent
+plugin version : ${VERSION}
+git commit     : ${GIT_COMMIT}${GIT_DIRTY}
+built          : $(date -u '+%Y-%m-%d %H:%M UTC')
+built on       : $(uname -s) $(uname -m)
+
+Requires a KADAS build from 2026-06-23 or later; see INSTALL.md.
+Quote the git commit above when reporting a problem.
+EOF
+ok "provenance stamped (${GIT_COMMIT}${GIT_DIRTY})"
+
 # 6. Zip -----------------------------------------------------------------------
 mkdir -p "$OUTPUT_DIR"
 OUT="$OUTPUT_DIR/$ZIP_NAME"
