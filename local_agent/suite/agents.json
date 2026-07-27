@@ -1,0 +1,115 @@
+{
+  "_comment": "Declarative agent registry for `python -m local_agent.suite`. Overlays local_agent/suite/agents.py:DEFAULT_AGENTS. Add a model = add an object here; no code change. Fields: name (required), provider, model, base_url, ollama_host, context_window, local, api_docs, upskill, fast, note. Prices are NOT here; see cost.py.",
+  "agents": [
+    {
+      "name": "claude",
+      "provider": "anthropic",
+      "model": "claude-sonnet-4-6",
+      "context_window": 200000,
+      "local": false,
+      "note": "Golden baseline. Bills ANTHROPIC_API_KEY. No injection."
+    },
+    {
+      "name": "local-raw",
+      "provider": "lmstudio",
+      "model": "qwen2.5-7b-instruct",
+      "base_url": "http://localhost:1234/v1",
+      "context_window": 32768,
+      "local": true,
+      "note": "LM Studio, nothing injected. Baseline the local variants must beat."
+    },
+    {
+      "name": "local-docs",
+      "provider": "lmstudio",
+      "model": "qwen2.5-7b-instruct",
+      "base_url": "http://localhost:1234/v1",
+      "context_window": 32768,
+      "local": true,
+      "api_docs": true,
+      "note": "+ generated KADAS API reference (documancer, #5)."
+    },
+    {
+      "name": "local-upskilled",
+      "provider": "lmstudio",
+      "model": "qwen2.5-7b-instruct",
+      "base_url": "http://localhost:1234/v1",
+      "context_window": 32768,
+      "local": true,
+      "upskill": true,
+      "note": "+ operations pathway (#3)."
+    },
+    {
+      "name": "local-both",
+      "provider": "lmstudio",
+      "model": "qwen2.5-7b-instruct",
+      "base_url": "http://localhost:1234/v1",
+      "context_window": 32768,
+      "local": true,
+      "api_docs": true,
+      "upskill": true,
+      "note": "+ both. Compound or dilute?"
+    },
+    {
+      "name": "eth-ollama",
+      "provider": "ollama",
+      "model": "qwen2.5:7b-instruct",
+      "ollama_host": "http://localhost:11434",
+      "context_window": 32768,
+      "local": true,
+      "note": "ETH Slurm node via SSH tunnel, nothing injected. `suite provision eth` first."
+    },
+    {
+      "name": "eth-docs",
+      "provider": "ollama",
+      "model": "qwen2.5:7b-instruct",
+      "ollama_host": "http://localhost:11434",
+      "context_window": 32768,
+      "local": true,
+      "api_docs": true,
+      "note": "ETH node + injected KADAS API reference (documancer)."
+    },
+    {
+      "name": "eth-upskilled",
+      "provider": "ollama",
+      "model": "qwen2.5:7b-instruct",
+      "ollama_host": "http://localhost:11434",
+      "context_window": 32768,
+      "local": true,
+      "upskill": true,
+      "note": "ETH node + operations guide (upskilling)."
+    },
+    {
+      "name": "eth-both",
+      "provider": "ollama",
+      "model": "qwen2.5:7b-instruct",
+      "ollama_host": "http://localhost:11434",
+      "context_window": 32768,
+      "local": true,
+      "api_docs": true,
+      "upskill": true,
+      "note": "ETH node + docs + upskilling. Do they compound or dilute?"
+    },
+    {
+      "name": "eth-plan",
+      "provider": "ollama",
+      "model": "qwen2.5:7b-instruct",
+      "ollama_host": "http://localhost:11434",
+      "context_window": 32768,
+      "local": true,
+      "plan": true,
+      "note": "ETH node + plan-first reasoning. Isolates the planning pass."
+    },
+    {
+      "name": "eth-plan-both",
+      "provider": "ollama",
+      "model": "qwen2.5:7b-instruct",
+      "ollama_host": "http://localhost:11434",
+      "context_window": 32768,
+      "local": true,
+      "api_docs": true,
+      "upskill": true,
+      "plan": true,
+      "note": "ETH node + docs + upskilling + plan-first. The full small-model stack."
+    }
+  ]
+}

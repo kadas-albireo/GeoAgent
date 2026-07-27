@@ -1,0 +1,11 @@
+{
+  "connection_mode": "eth_hybrid",
+  "eth_username": "achurchill",
+  "eth_login_host": "student-cluster2.inf.ethz.ch",
+  "active_slurm_node": "studgpu-node01",
+  "local_fallback_port": 11434,
+  "remote_port": 11434,
+  "ssh_key_path": "~/.ssh/id_ed25519",
+  "control_path": "~/.ssh/cm-geoagent-%r@%h-%p",
+  "ollama_model": "qwen2.5:7b-instruct"
+}

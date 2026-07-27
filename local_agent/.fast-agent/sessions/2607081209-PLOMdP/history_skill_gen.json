@@ -1,0 +1,41 @@
+{
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "Create a skill document that teaches an AI agent how to: GIS skills\n\nBased on this agent trace:\n\n# GeoAgent execution trace\n\n**Available tools:** list_project_layers, get_active_layer, get_project_state, zoom_in, zoom_out, zoom_to_layer, zoom_to_extent, set_center, set_scale, add_vector_layer, add_raster_layer, add_xyz_tile_layer, remove_layer, set_layer_visibility, set_layer_opacity, set_layer_symbology, create_hillshade_layer, inspect_layer_fields, get_selected_features, select_features_by_expression, clear_selection, zoom_to_selected, get_layer_summary, run_processing_algorithm, buffer_active_layer, open_attribute_table, refresh_canvas, run_pyqgis_script, save_project, search_geoadmin_catalog, get_geoadmin_layer_info, search_location, load_geoadmin_layer, locate_and_zoom, add_map_marker, add_text_annotation, add_map_circle, add_map_rectangle, add_map_polygon, clear_annotations, list_kadas_item_layers, get_kadas_layer_items, run_command, generate_image\n\n<details><summary>System prompt</summary>\n\nYou are GeoAgent, a geospatial assistant. Use tools for map and GIS actions.\nPrefer calling the right tool immediately when the user's intent is clear. Use create_hillshade_layer for DEM hillshade requests, especially when the DEM is a remote COG. Use set_layer_symbology for QGIS layer color, fill, outline, opacity, line-width, raster palette, DEM terrain palette, and raster color-ramp changes. For remote DEM/COG palette changes, pass raster_min and raster_max when sensible to avoid slow remote statistics reads. If the user asks to create, draw, render, or generate an image or picture, or provides a standalone visual description after discussing image generation, call generate_image when that tool is available; do not say you cannot generate images before trying the tool. Keep replies concise.\n\nYou are an AI assistant embedded in KADAS Albireo 2 a QGIS-based mapping\napplication used mainly with Swiss swisstopo geodata. You have the standard\nQGIS layer/canvas tools PLUS KADAS-specific tools for the swisstopo geoadmin\ncatalog, place-name search, and KADAS-native map annotations. Prefer these\ndedicated tools over writing PyQGIS by hand.\n\nHow KADAS operates (use this to choose tools):\n- KADAS does not ship a fixed layer list. The layer catalogue the user browses\n  is the live swisstopo geoadmin catalog (886 layers), and place search uses\n  the geoadmin SearchServer. Coordinates the user gives are WGS84 lon/lat;\n  Swiss local data is usually in LV95 (EPSG:2056). The default basemaps are\n  swisstopo WMTS tiles (national maps, SWISSIMAGE aerial, hillshade).\n\nCatalog & data loading:\n- To find a layer for a topic (\"aerial photos\", \"electric stations\", \"property\n  boundaries\", \"railways\"), call search_geoadmin_catalog to resolve the topic\n  to a layerBodId, then load_geoadmin_layer with that bod_id. Do not guess\n  bodIds.\n- load_geoadmin_layer is the ONLY correct way to add a swisstopo/geoadmin layer:\n  it loads via the official WMS service exactly like the KADAS geocatalog. NEVER\n  load swisstopo layers with add_xyz_tile_layer, add_raster_layer, or a\n  hand-built WMTS/XYZ tile URL (e.g. .../{z}/{x}/{y}.png). Those use the wrong\n  tiling scheme/CRS for the swisstopo grid and render as a blank layer. If\n  load_geoadmin_layer fails, report the error \u2014 do not fall back to a tile URL.\n- Known mappings you can use directly: aerial/SWISSIMAGE ->\n  ch.swisstopo.swissimage-product; national map (colour) ->\n  ch.swisstopo.pixelkarte-farbe; hillshade ->\n  ch.swisstopo.swissalti3d-reliefschattierung; cadastre/property boundaries ->\n  ch.kantone.cadastralwebmap-farbe.\n- For local files the user names, use the QGIS add_vector_layer /\n  add_raster_layer tools.\n- To measure distance between two loaded features, select them and use\n  run_processing_algorithm with native:shortestline.\n\nPlace search / navigation:\n- To find a place (\"Matterhorn\", \"Basel main station\", \"Thunplatz, Bern\"), call\n  search_location to get WGS84 coordinates and a bbox, then center/zoom with the\n  QGIS set_center / zoom_to_extent tools, or use locate_and_zoom for a one-shot\n  rece"
+        }
+      ],
+      "is_template": false,
+      "timestamp": "2026-07-08T10:08:21.585467Z"
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "I hit an internal error while calling the model: responses request failed for model 'gpt-5.4-mini' (code: insufficient_quota): You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors. See fast-agent-error for additional details."
+        }
+      ],
+      "channels": {
+        "fast-agent-error": [
+          {
+            "type": "text",
+            "text": "responses request failed for model 'gpt-5.4-mini' (code: insufficient_quota): You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors."
+          }
+        ],
+        "fast-agent-timing": [
+          {
+            "type": "text",
+            "text": "{\"start_time\": 20078.211431599, \"end_time\": 20119.406373837, \"duration_ms\": 41194.94}"
+          }
+        ]
+      },
+      "stop_reason": "error",
+      "is_template": false,
+      "timestamp": "2026-07-08T10:09:02.780784Z"
+    }
+  ]
+}

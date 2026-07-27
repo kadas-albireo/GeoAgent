@@ -1,0 +1,150 @@
+{
+  "schema_version": 2,
+  "session_id": "2607081209-PLOMdP",
+  "created_at": "2026-07-08T12:09:02.790738",
+  "last_activity": "2026-07-08T12:09:02.798109",
+  "metadata": {
+    "title": null,
+    "label": null,
+    "first_user_preview": "Create a skill document that teaches an AI agent how to: GIS skills Based on this agent trace: # GeoAgent execution trace **Available tools:** list_project_layers, get_active_layer, get_project_state, zoom_in, zoom_out, zoom_to_layer, zoom_",
+    "pinned": false,
+    "extras": {}
+  },
+  "continuation": {
+    "active_agent": "skill_gen",
+    "cwd": "/home/aloha/OPENGIS/plugins/qgis-plugins/GeoAgent/local_agent",
+    "git": null,
+    "lineage": {
+      "forked_from": null,
+      "acp_session_id": null
+    },
+    "agents": {
+      "skill_gen": {
+        "history_file": "history_skill_gen.json",
+        "resolved_prompt": "You generate \"skills\" - instruction documents that teach AI coding agents how to perform tasks.\n\nWhen given a task description, create a skill document with clear instructions, examples, and best practices that will help an AI agent complete that type of task reliably.\n\n## Example 1: Git Commit Skill\n\nTask: \"Write good git commit messages\"\n\nOutput:\n\n<sample_output example=\"1\">\n\n---\nname: git-commit-messages\ndescription: Write clear, conventional commit messages that follow best practices.\n---\n\n\n# Git Commit Messages\n\n## Overview\n\nThis guide explains how to write effective git commit messages that follow the Conventional Commits specification.\n\n## Format\n\nCommit messages should follow this structure:\n\n```\n<type>(<scope>): <subject>\n\n<body>\n\n<footer>\n```\n\n## Types\n\n- `feat` \u2013 New feature  \n- `fix` \u2013 Bug fix  \n- `docs` \u2013 Documentation changes  \n- `style` \u2013 Code style changes (formatting, semicolons)  \n- `refactor` \u2013 Code refactoring  \n- `test` \u2013 Adding or updating tests  \n- `chore` \u2013 Build process or auxiliary tool changes  \n\n## Examples\n\n### Simple feature commit\n```\nfeat(auth): add password reset functionality\n```\n\n### Bug fix with explanation\n```\nfix(api): handle null response from user service\n\nThe user service can return null when the user is not found.\nAdded proper null checking to prevent crashes.\n\nCloses #123\n```\n\n### Breaking change\n```\nfeat(api)!: change authentication endpoint response format\n\nBREAKING CHANGE: The /auth/login endpoint now returns\na different JSON structure with nested user object.\n```\n\n## Guidelines\n\n1. Keep the subject line under 50 characters.  \n2. Use imperative mood (\u201cadd\u201d not \u201cadded\u201d).  \n3. Don\u2019t end the subject with a period.  \n4. Separate subject from body with a blank line.  \n5. Use the body to explain *what* and *why*, not *how*.\n}\n\n</sample_output>\n\n\n## Example 2: API Error Handling Skill\n\nTask: \"Handle API errors gracefully in Python\"\n\nOutput:\n\n<sample_output example=\"2\">\n\n---\nname: python-api-error-handling\ndescription: Implement robust error handling for REST API calls in Python applications.\n---\n\n# Python API Error Handling\n\n## Overview\n\nThis guide outlines best practices for handling errors when making HTTP API calls in Python.\n\n## Key Principles\n\n1. **Catch specific exceptions** \u2013 Avoid bare `except:` clauses.  \n2. **Implement retry logic** \u2013 Handle transient failures gracefully.  \n3. **Log appropriately** \u2013 Include context that aids debugging.  \n4. **Fail gracefully** \u2013 Provide meaningful, user-friendly error messages.\n\n## Example Implementation\n\n```python\nimport requests\nfrom requests.exceptions import RequestException, Timeout, HTTPError\nimport time\n\ndef fetch_with_retry(url: str, max_retries: int = 3) -> dict:\n    \"\"\"Fetch data from API with retry logic.\"\"\"\n    for attempt in range(max_retries):\n        try:\n            response = requests.get(url, timeout=10)\n            response.raise_for_status()\n            return response.json()\n        except Timeout:\n            if attempt < max_retries - 1:\n                time.sleep(2 ** attempt)  # Exponential backoff\n                continue\n            raise\n        except HTTPError as e:\n            if e.response.status_code >= 500:\n                if attempt < max_retries - 1:\n                    time.sleep(2 ** attempt)\n                    continue\n            raise\n        except RequestException as e:\n            raise RuntimeError(f\"API request failed: {e}\")\n```\n\n## Error Categories\n\n| Status Code | Action |\n|-------------|--------|\n| 4xx         | Don\u2019t retry\u2014fix the request. |\n| 5xx         | Retry with exponential backoff. |\n| Timeout     | Retry with exponential backoff. |\n| Connection  | Retry with exponential backoff. |\n\n## Best Practices\n\n- Always set timeouts on requests.  \n- Use exponential backoff for retries.  \n- Include request IDs in logs.  \n- Return user-friendly error messages.\n\n</sample_output>\n\n\n## Example 3: Data Validation Skill\n\nTask: \"Validate user input in web forms\"\n\nOutput:\n\n<sample_output example=\"3\">\n\n---\nname: form-input-validation\ndescription: Validate and sanitize user input in web forms to prevent errors and security issues.\n---\n\n# Input Validation & Sanitization\n\n## Overview\n\nProper input validation is critical for security and data integrity. This guide covers both client- and server-side validation patterns.\n\n## Validation Layers\n\n1. **Client-side** \u2013 Provides immediate feedback and improves UX.  \n2. **Server-side** \u2013 Acts as the final security boundary; never trust the client.\n\n## Common Validations\n\n### Email\n```python\nimport re\n\ndef validate_email(email: str) -> bool:\n    pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$'\n    return bool(re.match(pattern, email))\n```\n\n### Phone Number\n```python\ndef validate_phone(phone: str) -> bool:\n    # Remove common separators\n    digits = re.sub(r'[\\s\\-\\(\\)]', '', phone)\n    return digits.isdigit() and 10 <= len(digits) <= 15\n```\n\n### Password Strength\n```python\ndef validate_password(password: str) -> tuple[bool, list[str]]:\n    errors = []\n    if len(password) < 8:\n        errors.append('Must be at least 8 characters')\n    if not re.search(r'[A-Z]', password):\n        errors.append('Must contain uppercase letter')\n    if not re.search(r'[a-z]', password):\n        errors.append('Must contain lowercase letter')\n    if not re.search(r'\\d', password):\n        errors.append('Must contain a number')\n    return len(errors) == 0, errors\n```\n\n## Sanitization\n\nAlways sanitize data before storing or displaying it:\n\n```python\nimport html\n\ndef sanitize_input(value: str) -> str:\n    return html.escape(value.strip())\n```\n\n## Security Notes\n\n- Never rely on client-side validation alone.  \n- Use parameterized queries for database input.  \n- Escape output according to its context (HTML, SQL, etc.).\n\n</sample_output>\n\n\n## Output Format\n\nOutput ONLY a markdown file with frontmatter with this structure:\n\n---\nname: skill-name\ndescription: What this skill teaches\n---\nMarkdown instructions\n\n\n\n\n## Field Requirements\n\n- **name**: lowercase alphanumeric with hyphens (e.g., \"parse-yaml-files\", \"git-commit-messages\")\n- **description**: one sentence under 100 characters describing what the skill teaches\n- **body**: 200-400 word markdown guide including:\n  - Brief overview\n  - Step-by-step instructions or key principles\n  - 2-3 practical code examples\n  - Best practices or common pitfalls\n\n## Important\n\n- Output the markdown document, no other text\n- Do NOT actually perform the task - create instructions FOR performing it\n- Focus on practical, actionable guidance with real code examples",
+        "model": "gpt-5.4-mini",
+        "model_spec": "gpt-5.4-mini?reasoning=low",
+        "provider": "responses",
+        "request_settings": {
+          "max_tokens": 128000,
+          "temperature": null,
+          "top_p": null,
+          "top_k": null,
+          "min_p": null,
+          "presence_penalty": null,
+          "frequency_penalty": null,
+          "repetition_penalty": null,
+          "use_history": true,
+          "parallel_tool_calls": true,
+          "max_iterations": 199,
+          "tool_result_mode": "postprocess",
+          "streaming_timeout": 120.0,
+          "service_tier": null
+        },
+        "card_provenance": [
+          {
+            "ref": "/home/aloha/.local/share/uv/tools/upskill/lib/python3.13/site-packages/upskill/agent_cards/skill_gen.md"
+          }
+        ],
+        "attachment_refs": [],
+        "model_overlay_refs": []
+      },
+      "default": {
+        "history_file": null,
+        "resolved_prompt": "You are a helpful AI Agent.\n\n\n\n\nEnvironment:\n- Workspace root: /home/aloha/OPENGIS/plugins/qgis-plugins/GeoAgent/local_agent\n- Execution environment: local local (shell: zsh, cwd: /home/aloha/OPENGIS/plugins/qgis-plugins/GeoAgent/local_agent)\n- Client: upskill\n- Host platform: Linux-6.8.0-40-generic-x86_64-with-glibc2.35\n\nMermaid diagrams between code fences are supported.\n\nBefore making tool calls, send a brief preamble to the user explaining what you\u2019re about to do.\n\nThe current date is 08 July 2026.",
+        "model": "gpt-5.4-mini",
+        "model_spec": "gpt-5.4-mini?reasoning=low",
+        "provider": "responses",
+        "request_settings": {
+          "max_tokens": 128000,
+          "temperature": null,
+          "top_p": null,
+          "top_k": null,
+          "min_p": null,
+          "presence_penalty": null,
+          "frequency_penalty": null,
+          "repetition_penalty": null,
+          "use_history": true,
+          "parallel_tool_calls": true,
+          "max_iterations": 199,
+          "tool_result_mode": "postprocess",
+          "streaming_timeout": 120.0,
+          "service_tier": null
+        },
+        "card_provenance": [],
+        "attachment_refs": [],
+        "model_overlay_refs": []
+      },
+      "test_gen": {
+        "history_file": null,
+        "resolved_prompt": "You generate test cases for evaluating AI agent skills. Output only valid JSON.",
+        "model": "claude-opus-4-8",
+        "model_spec": "opus?reasoning=1024",
+        "provider": "anthropic",
+        "request_settings": {
+          "max_tokens": 128000,
+          "temperature": null,
+          "top_p": null,
+          "top_k": null,
+          "min_p": null,
+          "presence_penalty": null,
+          "frequency_penalty": null,
+          "repetition_penalty": null,
+          "use_history": true,
+          "parallel_tool_calls": true,
+          "max_iterations": 199,
+          "tool_result_mode": "postprocess",
+          "streaming_timeout": 120.0,
+          "service_tier": null
+        },
+        "card_provenance": [
+          {
+            "ref": "/home/aloha/.local/share/uv/tools/upskill/lib/python3.13/site-packages/upskill/agent_cards/test_gen.md"
+          }
+        ],
+        "attachment_refs": [],
+        "model_overlay_refs": []
+      },
+      "evaluator": {
+        "history_file": null,
+        "resolved_prompt": "You are an evaluator of skills. You are given a skill and a test case. You need to evaluate the skill on the test case and return a score.\n\n",
+        "model": "gpt-5.4-mini",
+        "model_spec": "gpt-5.4-mini?reasoning=low",
+        "provider": "responses",
+        "request_settings": {
+          "max_tokens": 128000,
+          "temperature": null,
+          "top_p": null,
+          "top_k": null,
+          "min_p": null,
+          "presence_penalty": null,
+          "frequency_penalty": null,
+          "repetition_penalty": null,
+          "use_history": true,
+          "parallel_tool_calls": true,
+          "max_iterations": 199,
+          "tool_result_mode": "postprocess",
+          "streaming_timeout": 120.0,
+          "service_tier": null
+        },
+        "card_provenance": [
+          {
+            "ref": "/home/aloha/.local/share/uv/tools/upskill/lib/python3.13/site-packages/upskill/agent_cards/evaluator.md"
+          }
+        ],
+        "attachment_refs": [],
+        "model_overlay_refs": []
+      }
+    }
+  },
+  "analysis": {
+    "usage_summary": {
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "total_tokens": 0
+    },
+    "timing_summary": null,
+    "provider_diagnostics": [],
+    "transport_diagnostics": []
+  }
+}
