@@ -43,9 +43,7 @@ GEOADMIN_HOST = "api3.geo.admin.ch"
 # Per-topic layer configuration: a flat dict keyed by layerBodId carrying the
 # label, service type (wmts/wms/aggregate), tile format and timestamps. The
 # ``ech`` topic mirrors the KADAS catalog tree.
-LAYERS_CONFIG_URL = (
-    f"https://{GEOADMIN_HOST}/rest/services/ech/MapServer/layersConfig"
-)
+LAYERS_CONFIG_URL = f"https://{GEOADMIN_HOST}/rest/services/ech/MapServer/layersConfig"
 # Place-name search (the geoadmin SearchServer behind KadasLocationSearchProvider).
 SEARCH_URL = f"https://{GEOADMIN_HOST}/rest/services/api/SearchServer"
 # swisstopo WMS endpoint — the service the KADAS geocatalog actually loads from.
@@ -122,7 +120,9 @@ def _layers_config(*, force: bool = False) -> dict[str, Any]:
         and (now - float(_LAYERS_CACHE["fetched_at"])) < _LAYERS_CACHE_TTL
     ):
         return cached
-    data = _fetch_json(f"{LAYERS_CONFIG_URL}?{urlencode({'lang': 'en'})}") # TODO: need to extend this for multilingual support
+    data = _fetch_json(
+        f"{LAYERS_CONFIG_URL}?{urlencode({'lang': 'en'})}"
+    )  # TODO: need to extend this for multilingual support
     if not isinstance(data, dict):
         data = {}
     _LAYERS_CACHE["data"] = data
@@ -188,9 +188,7 @@ def _search_catalog(query: str, limit: int) -> list[dict[str, Any]]:
     return [rec for _, rec in scored[: max(1, int(limit))]]
 
 
-def _wms_layer_uri(
-    bod_id: str, crs: str = "EPSG:2056", fmt: str = "image/png"
-) -> str:
+def _wms_layer_uri(bod_id: str, crs: str = "EPSG:2056", fmt: str = "image/png") -> str:
     """Build a QGIS WMS provider URI identical to the KADAS geocatalog's.
 
     Mirrors ``KadasCatalogProvider::parseWMSLayerCapabilities`` +
@@ -439,16 +437,13 @@ def geoadmin_tools(iface: Any = None, project: Optional[Any] = None) -> list[Any
     # permission profile strip load_geoadmin_layer while leaving the generic
     # (broken-for-swisstopo) tile loaders available — so the agent fell back to
     # add_xyz_tile_layer and produced blank layers, or had no loader at all.
-    
-    
+
     # TODO: This function needs to be cleaned up
     @geo_tool(
         category="geoadmin",
         available_in=("full", "fast"),
     )
-    def load_geoadmin_layer(
-        bod_id: str, name: Optional[str] = None
-    ) -> dict[str, Any]:
+    def load_geoadmin_layer(bod_id: str, name: Optional[str] = None) -> dict[str, Any]:
         """Load a geoadmin catalog layer into the project as a WMS raster.
 
         Loads the layer the same way a manual KADAS geocatalog click does: a

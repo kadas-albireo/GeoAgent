@@ -1121,9 +1121,14 @@ def _raise_layer_error(
 
 
 def _xyz_uri_from_tile_url(tile_url: str) -> str:
-    """Return a QGIS XYZ datasource URI with the nested tile URL encoded."""
-    encoded_url = quote(tile_url, safe=":/{}")
-    return f"type=xyz&url={encoded_url}&zmax=24&zmin=0"
+    """Return a QGIS XYZ datasource URI with the nested tile URL encoded.
+
+    The ``{z}/{x}/{y}`` braces are percent-encoded (strict QGIS/KADAS rejects raw
+    braces) and ``crs=EPSG:3857`` is declared, since XYZ tile pyramids are Web
+    Mercator and a source with no CRS is refused. Matches ``qgis._xyz_tile_uri``.
+    """
+    encoded_url = quote(tile_url, safe=":/")
+    return f"type=xyz&url={encoded_url}&zmax=24&zmin=0&crs=EPSG:3857"
 
 
 def _ee_tile_url(ee_object: Any, vis_params: dict[str, Any]) -> str:

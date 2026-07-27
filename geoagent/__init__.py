@@ -28,6 +28,10 @@ from geoagent.core.safety import (
     auto_approve_safe_only,
     build_interrupt_on,
 )
+from geoagent.core.telemetry import (
+    AgentTracer,
+    TraceHookProvider,
+)
 from geoagent.core.factory import (
     create_agent,
     for_anymap,
@@ -80,6 +84,8 @@ __all__ = [
     "auto_approve_all",
     "auto_approve_safe_only",
     "build_interrupt_on",
+    "AgentTracer",
+    "TraceHookProvider",
     "resolve_model",
     "get_llm",
     "get_default_model",

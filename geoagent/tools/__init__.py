@@ -13,6 +13,7 @@ from geoagent.tools.nasa_earthdata import earthdata_tools
 from geoagent.tools.nasa_opera import nasa_opera_tools
 from geoagent.tools.qgis import qgis_tools
 from geoagent.tools.stac import stac_tools
+from geoagent.tools.terminal import terminal_tools
 from geoagent.tools.timelapse import timelapse_tools
 from geoagent.tools.vantor import vantor_tools
 from geoagent.tools.whitebox import whitebox_tools
@@ -31,6 +32,7 @@ __all__ = [
     "nasa_opera_tools",
     "qgis_tools",
     "stac_tools",
+    "terminal_tools",
     "timelapse_tools",
     "vantor_tools",
     "whitebox_tools",

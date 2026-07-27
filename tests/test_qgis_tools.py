@@ -444,14 +444,15 @@ def test_add_xyz_tile_layer_uses_raster_fallback() -> None:
     assert "Tiles" in project.mapLayers()
     assert (
         project.mapLayersByName("Tiles")[0].source()
-        == "type=xyz&url=https://example.com/{z}/{x}/{y}.png"
+        == "type=xyz&url=https://example.com/%7Bz%7D/%7Bx%7D/%7By%7D.png&crs=EPSG:3857"
     )
     assert iface.activeLayer() is project.mapLayersByName("Tiles")[0]
     assert iface.mapCanvas().refresh_count == 1
 
 
-def test_xyz_tile_uri_keeps_template_url_readable() -> None:
-    """Verify QGIS XYZ URIs do not encode the whole tile URL."""
+def test_xyz_tile_uri_encodes_braces_but_keeps_host_readable() -> None:
+    """Percent-encode the {z}/{x}/{y} braces (strict QGIS/KADAS rejects raw
+    braces) while leaving the scheme/host readable."""
     uri = _xyz_tile_uri(
         "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
         zmin=0,
@@ -459,11 +460,13 @@ def test_xyz_tile_uri_keeps_template_url_readable() -> None:
         attribution="OpenStreetMap contributors",
     )
 
-    assert "url=https://tile.openstreetmap.org/{z}/{x}/{y}.png" in uri
+    assert "url=https://tile.openstreetmap.org/%7Bz%7D/%7Bx%7D/%7By%7D.png" in uri
+    assert "{z}" not in uri
     assert "https%3A%2F%2Ftile.openstreetmap.org" not in uri
     assert "referer=" not in uri
     assert "zmin=0" in uri
     assert "zmax=19" in uri
+    assert "crs=EPSG:3857" in uri
 
 
 def test_xyz_tile_uri_for_openstreetmap() -> None:
@@ -476,7 +479,8 @@ def test_xyz_tile_uri_for_openstreetmap() -> None:
     )
 
     assert uri == (
-        "type=xyz&url=https://tile.openstreetmap.org/{z}/{x}/{y}.png" "&zmin=0&zmax=19"
+        "type=xyz&url=https://tile.openstreetmap.org/%7Bz%7D/%7Bx%7D/%7By%7D.png"
+        "&zmin=0&zmax=19&crs=EPSG:3857"
     )
 
 
@@ -485,7 +489,8 @@ def test_xyz_tile_uri_encodes_nested_query_parameters() -> None:
     uri = _xyz_tile_uri("https://example.com/{z}/{x}/{y}.png?token=abc&v=1")
 
     assert uri == (
-        "type=xyz&url=https://example.com/{z}/{x}/{y}.png" "%3Ftoken%3Dabc%26v%3D1"
+        "type=xyz&url=https://example.com/%7Bz%7D/%7Bx%7D/%7By%7D.png"
+        "%3Ftoken%3Dabc%26v%3D1&crs=EPSG:3857"
     )
 
 

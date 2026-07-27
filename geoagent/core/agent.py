@@ -21,6 +21,7 @@ from geoagent.core.prompts import DEFAULT_SYSTEM_PROMPT, FAST_SYSTEM_PROMPT
 from geoagent.core.registry import GeoToolRegistry
 from geoagent.core.result import GeoAgentResponse
 from geoagent.core.safety import ConfirmCallback, auto_approve_safe_only
+from geoagent.core.telemetry import AgentTracer, TraceHookProvider
 from geoagent.tools._qt_marshal import is_qt_gui_thread, process_qt_events
 
 _IMAGE_MIME_BY_FORMAT = {
@@ -337,6 +338,7 @@ class GeoAgent:
         fast: bool = False,
         confirm: ConfirmCallback | None = None,
         qgis_safe_mode: bool = False,
+        tracer: AgentTracer | None = None,
     ) -> None:
         self._context = context or GeoAgentContext()
         cfg = config or GeoAgentConfig()
@@ -354,6 +356,7 @@ class GeoAgent:
         self._cancelled: list[str] = []
         self._tool_calls: list[dict[str, Any]] = []
         self._confirm = confirm or auto_approve_safe_only
+        self._tracer = tracer
         self._model = model or resolve_model(self._config)
         self._rebuild_strands_agent()
 
@@ -370,12 +373,15 @@ class GeoAgent:
             self._cancelled,
             self._tool_calls,
         )
+        hooks: list[Any] = [hook]
+        if self._tracer is not None:
+            hooks.append(TraceHookProvider(self._tracer))
 
         self._strands = Agent(
             model=self._model,
             tools=self._tool_list,
             system_prompt=prompt,
-            hooks=[hook],
+            hooks=hooks,
             callback_handler=None,
             tool_executor=SequentialToolExecutor() if self._qgis_safe_mode else None,
         )
@@ -409,6 +415,11 @@ class GeoAgent:
     def config(self) -> GeoAgentConfig:
         """GeoAgent model and runtime configuration."""
         return self._config
+
+    @property
+    def telemetry(self) -> AgentTracer | None:
+        """The execution tracer when full LLM-mode logging is enabled."""
+        return self._tracer
 
     def __getattr__(self, name: str) -> Any:
         """Forward unknown attributes to the underlying Strands agent."""
@@ -507,6 +518,8 @@ class GeoAgent:
             )
         except Exception as exc:
             elapsed = time.time() - t0
+            if self._tracer is not None:
+                self._tracer.log_error(_format_chat_exception(exc))
             return GeoAgentResponse(
                 success=False,
                 error_message=_format_chat_exception(exc),
