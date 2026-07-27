@@ -31,12 +31,24 @@ done
 
 ok()   { printf '  \033[32mok\033[0m   %s\n' "$1"; }
 info() { printf '  ..   %s\n' "$1"; }
+warn() { printf '  \033[33mwarn\033[0m %s\n' "$1"; }
 die()  { printf '  \033[31mfail\033[0m %s\n' "$1" >&2; exit 1; }
 
 VERSION=$(grep '^version=' "$PLUGIN_SRC/metadata.txt" | cut -d= -f2 | tr -d '[:space:]')
 [ -n "$VERSION" ] || die "could not read version from metadata.txt"
 
-ZIP_NAME="kadas_geoagent-${VERSION}.zip"
+# Git state is part of the build identity, so resolve it before naming the zip.
+# A dirty tree is marked in the filename too: an unreproducible build should be
+# obvious from the file alone, not just from something inside it.
+GIT_COMMIT=$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo "nogit")
+GIT_DIRTY=""
+DIRTY_SUFFIX=""
+if ! git -C "$REPO_ROOT" diff --quiet HEAD 2>/dev/null; then
+  GIT_DIRTY=" (uncommitted changes)"
+  DIRTY_SUFFIX="-dirty"
+fi
+
+ZIP_NAME="kadas_geoagent-${VERSION}-${GIT_COMMIT}${DIRTY_SUFFIX}.zip"
 STAGE=$(mktemp -d)
 trap 'rm -rf "$STAGE"' EXIT
 PKG="$STAGE/kadas_geoagent"
@@ -88,6 +100,24 @@ for doc in INSTALL.md LOCAL_MODEL.md; do
 done
 ok "client docs included"
 
+# 6. Build provenance ----------------------------------------------------------
+# Support's first question is always "which build are you running?". Stamping the
+# commit into the zip answers it without guesswork, and the dirty flag makes an
+# unreproducible build obvious rather than silent.
+[ -n "$DIRTY_SUFFIX" ] && \
+  warn "building from a DIRTY working tree - this build is not reproducible"
+cat > "$PKG/BUILD_INFO.txt" <<EOF
+KADAS GeoAgent
+plugin version : ${VERSION}
+git commit     : ${GIT_COMMIT}${GIT_DIRTY}
+built          : $(date -u '+%Y-%m-%d %H:%M UTC')
+built on       : $(uname -s) $(uname -m)
+
+Requires a KADAS build from 2026-06-23 or later; see INSTALL.md.
+Quote the git commit above when reporting a problem.
+EOF
+ok "provenance stamped (${GIT_COMMIT}${GIT_DIRTY})"
+
 # 6. Zip -----------------------------------------------------------------------
 mkdir -p "$OUTPUT_DIR"
 OUT="$OUTPUT_DIR/$ZIP_NAME"
@@ -118,6 +148,16 @@ if unzip -l "$OUT" | grep -qiE "secrets\.yaml|\.venv/|site-packages/"; then
 fi
 ok "no secrets or virtualenvs in archive"
 
+SHA=$(sha256sum "$OUT" | cut -d' ' -f1)
+
 echo
-echo "Deliverable: $OUT"
-echo "Send this single file to the client along with INSTALL.md."
+echo "=================================================================="
+echo " Deliverable : $OUT"
+echo " Size        : $(du -h "$OUT" | cut -f1)"
+echo " Version     : ${VERSION}  (commit ${GIT_COMMIT}${GIT_DIRTY})"
+echo " SHA-256     : $SHA"
+echo "=================================================================="
+echo
+echo "Send this single file to the client. It installs on Linux and Windows"
+echo "via Plugins -> Manage and Install Plugins -> Install from ZIP."
+echo "INSTALL.md and LOCAL_MODEL.md are inside the zip as well."
