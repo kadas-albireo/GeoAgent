@@ -7,8 +7,18 @@ is it to Zurich?" — and it operates the map for you.
 **You do not need any programming knowledge to follow this guide.**
 
 - Time required: about 15 minutes
-- You need: KADAS Albireo 2 installed, an internet connection, and a payment card
-  (for the AI account, typically a few euros a month)
+- You need: a recent KADAS Albireo (see below), an internet connection, and a
+  payment card (for the AI account, typically a few euros a month)
+
+> ### ⚠️ Check your KADAS version first
+>
+> This plugin needs a **KADAS build from June 2026 or later**. Older versions
+> (v2.3.20 and earlier) use a different internal system for map drawing, and the
+> assistant cannot work with them.
+>
+> Check under **Help → About**. If your version is older, the plugin will tell
+> you so and refuse to load rather than half-working — ask your KADAS supplier
+> for a current build.
 
 > **Prefer not to use an online AI service, or need to work offline?**
 > Skip to [LOCAL_MODEL.md](LOCAL_MODEL.md) and run the AI on your own computer

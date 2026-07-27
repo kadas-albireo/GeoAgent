@@ -9,10 +9,15 @@ about=KADAS GeoAgent brings the GeoAgent QGIS tool surface into a dockable
     interface to the QGIS iface surface GeoAgent expects.
 
     Requirements:
+    - A KADAS build from 2026-06-23 or later (Qt6). The plugin uses the
+      QgsAnnotationLayer-based annotation API introduced by the "Annotation
+      refactoring" change; releases up to and including v2.3.20 ship the older
+      KadasItemLayer API on Qt5 and are NOT supported. The plugin detects this
+      and refuses to load rather than failing tool by tool.
     - GeoAgent and provider clients, installable from Settings > Dependencies
     - The shared OpenGeoAgent dock package (open_geoagent) importable on the
       KADAS Python path
-    - KADAS Albireo 2 with Python 3.11 or newer
+    - KADAS Albireo with Python 3.11 or newer
 version=0.1.0
 author=OpenGIS
 email=aloha@opengis.ch

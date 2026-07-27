@@ -16,7 +16,7 @@ from qgis.PyQt.QtWidgets import QMessageBox
 from kadas.kadasgui import KadasPluginInterface
 
 from .kadas_iface_adapter import KadasIfaceAdapter
-from ._shared import ensure_open_geoagent_importable
+from ._shared import ensure_open_geoagent_importable, has_kadas_annotation_api
 
 PLUGIN_DIR = os.path.dirname(__file__)
 
@@ -56,7 +56,16 @@ class KadasGeoAgent(QObject):
     # -- Lifecycle -------------------------------------------------------
 
     def initGui(self):
-        """Create KADAS ribbon entries for the chat and settings panels."""
+        """Create KADAS ribbon entries for the chat and settings panels.
+
+        Registers nothing on a KADAS older than the 2026-06-23 annotation
+        rewrite: the tool surface is written against the new annotation API, so
+        loading there would give the user a plugin whose map tools all fail.
+        """
+        if not has_kadas_annotation_api():
+            self._warn_unsupported_kadas()
+            return
+
         chat_icon = self._icon("icon.svg")
         settings_icon = self._icon("settings.svg")
 
@@ -80,6 +89,21 @@ class KadasGeoAgent(QObject):
             self.kadas_iface.PLUGIN_MENU,
             self.kadas_iface.MAPS_TAB,
         )
+
+    def _warn_unsupported_kadas(self):
+        """Tell the user why the plugin did not load, in both places they look."""
+        message = (
+            "KADAS GeoAgent requires a newer KADAS Albireo. This build predates "
+            "the annotation API rewrite (2026-06-23), so the agent's map tools "
+            "cannot run. The plugin has not been loaded."
+        )
+        try:
+            self.kadas_iface.messageBar().pushCritical("KADAS GeoAgent", message)
+        except Exception:
+            # A message bar is not guaranteed this early in plugin start-up.
+            pass
+        # The message bar is transient, so also leave it on stderr for support.
+        print(f"[kadas_geoagent] {message}")
 
     def unload(self):
         """Remove docks and ribbon actions."""
@@ -107,9 +131,7 @@ class KadasGeoAgent(QObject):
         """Show, create, or hide the chat dock (hides settings when shown)."""
         if self._dependencies_missing():
             self._show_settings_dock(dependencies_tab=True)
-            self._warn(
-                "Install missing dependencies before opening the chat panel."
-            )
+            self._warn("Install missing dependencies before opening the chat panel.")
             return
 
         # Already open: clicking the ribbon entry again closes it.
@@ -152,9 +174,7 @@ class KadasGeoAgent(QObject):
             if widget_cls is None:
                 self._set_checked(self.settings_action, False)
                 return
-            self._settings_dock = widget_cls(
-                self.iface, self.kadas_iface.mainWindow()
-            )
+            self._settings_dock = widget_cls(self.iface, self.kadas_iface.mainWindow())
             self._settings_dock.setObjectName("KadasGeoAgentSettingsDock")
             self._add_dock(self._settings_dock)
 
@@ -164,9 +184,7 @@ class KadasGeoAgent(QObject):
             self._chat_dock,
             self.chat_action,
         )
-        if dependencies_tab and hasattr(
-            self._settings_dock, "show_dependencies_tab"
-        ):
+        if dependencies_tab and hasattr(self._settings_dock, "show_dependencies_tab"):
             self._settings_dock.show_dependencies_tab()
 
     # -- Helpers ---------------------------------------------------------
@@ -271,9 +289,7 @@ class KadasGeoAgent(QObject):
         try:
             import importlib
 
-            module = importlib.import_module(
-                f"open_geoagent.dialogs.{module_name}"
-            )
+            module = importlib.import_module(f"open_geoagent.dialogs.{module_name}")
             return getattr(module, class_name)
         except Exception as exc:
             self._error(f"Failed to load the {class_name} panel:\n{exc}")
@@ -288,6 +304,4 @@ class KadasGeoAgent(QObject):
 
     def _error(self, message):
         """Show a critical dialog parented to the KADAS main window."""
-        QMessageBox.critical(
-            self.kadas_iface.mainWindow(), "KADAS GeoAgent", message
-        )
+        QMessageBox.critical(self.kadas_iface.mainWindow(), "KADAS GeoAgent", message)

@@ -65,7 +65,9 @@ def _candidate_roots() -> list[str]:
         # The package may sit directly under this ancestor ...
         add(ancestor)
         # ... or one level down, e.g. <ancestor>/qgis_geoagent/open_geoagent.
-        for match in glob.glob(os.path.join(ancestor, "*", "open_geoagent", "__init__.py")):
+        for match in glob.glob(
+            os.path.join(ancestor, "*", "open_geoagent", "__init__.py")
+        ):
             add(os.path.dirname(os.path.dirname(match)))
         parent = os.path.dirname(ancestor)
         if parent == ancestor:  # reached filesystem root
@@ -73,6 +75,25 @@ def _candidate_roots() -> list[str]:
         ancestor = parent
 
     return roots
+
+
+# The annotation rewrite (kadas-albireo2 commit 78efe485, "Annotation refactoring
+# (#455)", 2026-06-23) replaced KadasItemLayer + mapitems/ with stock
+# QgsAnnotationLayer + Kadas*AnnotationItem. No tagged release contains it:
+# v2.3.20, the newest 2.x tag, still ships the old API *and* builds against Qt5.
+# GeoAgent's whole annotation surface is written against the new classes, so on an
+# older KADAS every annotation tool would import-fail at call time -- the agent
+# would offer 15 tools and get an ImportError from each. Refuse up front instead.
+_REQUIRED_ANNOTATION_CLASS = "KadasAnnotationLayerHelpers"
+
+
+def has_kadas_annotation_api() -> bool:
+    """True when this KADAS ships the QgsAnnotationLayer-based annotation API."""
+    try:
+        module = importlib.import_module("kadas.kadasgui")
+    except Exception:
+        return False
+    return hasattr(module, _REQUIRED_ANNOTATION_CLASS)
 
 
 def ensure_open_geoagent_importable() -> Optional[str]:
