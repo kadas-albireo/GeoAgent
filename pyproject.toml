@@ -76,6 +76,15 @@ dev = [
 include = ["geoagent*"]
 exclude = ["docs*", "tests*", "examples*"]
 
+# The KADAS API reference packs are data, not code: geoagent/docs/*.md is generated from
+# the kadas-albireo2 SIP bindings (local_agent/docs/gen_kadas_docs.py) and retrieved at
+# runtime by geoagent.core.context_docs. Without this they would be dropped from the wheel
+# and retrieval would silently return nothing.
+[tool.setuptools.package-data]
+# docs/*.md: the KADAS/PyQGIS API reference packs (documancer corpus).
+# core/*.md: the operations guide injected by geoagent.core.operations_guide (upskilling).
+geoagent = ["docs/*.md", "core/*.md"]
+
 [tool.distutils.bdist_wheel]
 universal = true
 
@@ -105,6 +114,11 @@ exclude = ["docs"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "qgis_geoagent/tests"]
+
+[tool.uv.workspace]
+members = [
+    "local_agent",
+]
 
 [project.urls]
 Homepage = "https://github.com/opengeos/GeoAgent"

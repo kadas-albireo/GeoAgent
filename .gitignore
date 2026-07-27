@@ -109,6 +109,8 @@ node_modules/
 # IDE settings
 .vscode/
 CLAUDE.md
+CLAUDE.local.md
+.claude/settings.local.json
 .firecrawl/
 .codex
 *.zip
