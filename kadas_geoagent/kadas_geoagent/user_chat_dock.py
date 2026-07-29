@@ -131,7 +131,6 @@ def build_kadas_chat_dock_class():
         return _CACHED_CLASS
 
     from qgis.PyQt.QtWidgets import (
-        QCheckBox,
         QComboBox,
         QFileDialog,
         QFrame,
@@ -150,6 +149,7 @@ def build_kadas_chat_dock_class():
     )
 
     from open_geoagent.dialogs.chat_dock import (
+        SETTINGS_PREFIX,
         ChatDockWidget,
         PromptTextEdit,
         _markdown_to_basic_html,
@@ -173,17 +173,51 @@ def build_kadas_chat_dock_class():
             self._feedback_logger = FeedbackLogger()
             # Path of a Markdown skill file to "upskill" the agent with.
             self._skill_file_path = ""
-            # Whether to retrieve the real KADAS API reference for each question.
-            self._api_docs_enabled = False
+            # Seed KADAS-appropriate defaults before the base class restores
+            # settings in super().__init__ (see the method for the rationale).
+            self._apply_kadas_defaults()
             super().__init__(iface, parent)
             self.setWindowTitle("KADAS GeoAgent")
             self._build_user_mode_ui()
             self._restore_skill_file()
-            self._restore_api_docs_pref()
             self._user_ready = True
             # Per product decision: always open in the simple user mode.
             self._set_developer_mode(False)
             self._sync_user_view()
+
+        # -- KADAS defaults ---------------------------------------------------
+
+        def _apply_kadas_defaults(self):
+            """Seed KADAS-appropriate settings the first time the dock is used.
+
+            KADAS ships as a turnkey product: the end user should not have to
+            open Developer mode and configure the engine before it works. These
+            are written to the shared OpenGeoAgent QSettings only when they are
+            still unset, so a developer who changes them in Developer mode keeps
+            their choice across restarts.
+
+            * agent_mode -> "KADAS": the KADAS tool surface (swisstopo, OSM,
+              annotations) rather than the generic QGIS one.
+            * permission_profile -> "Trusted auto-approve" and
+              auto_approve_tools -> True: the agent runs its tools without a
+              confirmation prompt on every step.
+            * max_tokens -> 32768 (the Settings spinbox maximum): the providers
+              we bill (e.g. Anthropic) require a concrete output-token budget;
+              the "Auto" sentinel leaves it unset and the request fails.
+            """
+            from qgis.PyQt.QtCore import QSettings
+
+            settings = QSettings()
+            defaults = {
+                "agent_mode": "KADAS",
+                "permission_profile": "Trusted auto-approve",
+                "auto_approve_tools": True,
+                "max_tokens": 32768,
+            }
+            for key, value in defaults.items():
+                full_key = f"{SETTINGS_PREFIX}{key}"
+                if settings.value(full_key) is None:
+                    settings.setValue(full_key, value)
 
         # -- UI construction --------------------------------------------------
 
@@ -293,20 +327,8 @@ def build_kadas_chat_dock_class():
             skill_row.addWidget(self.skill_clear_btn)
             layout.addLayout(skill_row)
 
-            # Auto-inject the real KADAS Python API for the current question.
-            # Off by default: it is a context/latency trade, and the point of the
-            # benchmarks is to measure whether it helps rather than assume it.
-            self.api_docs_check = QCheckBox(
-                "Include KADAS API reference for the question"
-            )
-            self.api_docs_check.setToolTip(
-                "Look up the relevant KADAS API (generated from its SIP bindings) by "
-                "keyword and add it to each request, so the model uses real signatures "
-                "instead of guessing.\n\n"
-                "Adds roughly 1-3k tokens to the turn it matches."
-            )
-            self.api_docs_check.toggled.connect(self._set_api_docs_enabled)
-            layout.addWidget(self.api_docs_check)
+            # The "Inject API docs (documancer)" toggle lives in the shared
+            # OpenGeoAgent Settings dock only; it used to be duplicated here.
 
             status_row = QHBoxLayout()
             status_row.addWidget(QLabel("Status:"))
@@ -507,65 +529,26 @@ def build_kadas_chat_dock_class():
                 return ""
             return text.strip()
 
-        _API_DOCS_SETTING = KADAS_SETTINGS_PREFIX + "inject_api_docs"
-
-        def _restore_api_docs_pref(self):
-            """Load the persisted 'include API reference' toggle into the UI."""
-            from qgis.PyQt.QtCore import QSettings
-
-            enabled = QSettings().value(self._API_DOCS_SETTING, False, type=bool)
-            self._api_docs_enabled = bool(enabled)
-            if getattr(self, "api_docs_check", None) is not None:
-                self.api_docs_check.setChecked(self._api_docs_enabled)
-
-        def _set_api_docs_enabled(self, enabled):
-            """Persist the toggle so it survives a restart."""
-            from qgis.PyQt.QtCore import QSettings
-
-            self._api_docs_enabled = bool(enabled)
-            QSettings().setValue(self._API_DOCS_SETTING, self._api_docs_enabled)
-
-        def _api_docs_text(self, prompt):
-            """Return KADAS API reference relevant to *prompt*, or ''.
-
-            Retrieved fresh per turn by keyword, so only the API the question is about is
-            paid for. Degrades to '' if geoagent is too old to ship the packs.
-            """
-            if not getattr(self, "_api_docs_enabled", False):
-                return ""
-            try:
-                from geoagent.core.context_docs import build_context_block
-            except ImportError:
-                return ""
-            try:
-                return build_context_block(prompt)
-            except OSError:
-                return ""
-
         def _build_prompt_with_context(self, prompt):
-            """Prepend the skill file and (optionally) the KADAS API reference.
+            """Prepend the selected skill file to the shared dock's context.
 
             Extends the shared dock's context builder so a chosen SKILL.md /
-            skills_prompt.md becomes extra guidance for the turn — the "upskill"
-            step surfaced in the UI — and so the "Include KADAS API reference"
-            toggle adds the real signatures for whatever was asked.
+            skills_prompt.md becomes extra guidance for the turn (the "upskill"
+            step surfaced in the UI).
 
-            Both go into the **user message**, never the system prompt. The system
-            prompt plus the tool definitions form a byte-stable prefix that llama.cpp
-            caches: re-sending an identical ~16k prefix to a local qwen2.5-7b costs
-            ~0.5s, while changing it costs 13-22s because the whole prefix must be
-            reprefilled. This guidance varies per question, so putting it in the system
-            prompt would destroy that cache on every turn.
+            The KADAS API reference (documancer) is handled entirely by the
+            shared dock's ``inject_api_docs`` setting in the OpenGeoAgent Settings
+            dock, so it is not duplicated here.
 
-            The raw ``prompt`` (not the composed history) drives retrieval: matching
-            triggers against the transcript would keep firing on whatever was discussed
-            several turns ago.
+            The skill text goes into the **user message**, never the system
+            prompt. The system prompt plus the tool definitions form a byte-stable
+            prefix that llama.cpp caches: re-sending an identical ~16k prefix to a
+            local qwen2.5-7b costs ~0.5s, while changing it costs 13-22s because
+            the whole prefix must be reprefilled. This guidance varies per
+            question, so putting it in the system prompt would destroy that cache
+            on every turn.
             """
             composed = super()._build_prompt_with_context(prompt)
-
-            api_docs = self._api_docs_text(prompt)
-            if api_docs:
-                composed = f"{api_docs}\n{composed}"
 
             skill_text = self._selected_skill_text()
             if not skill_text:

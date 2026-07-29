@@ -294,8 +294,16 @@ def test_plugin_provider_combo_matches_geoagent_providers() -> None:
     providers = set(_plugin_constant("PROVIDERS"))
     valid = set(typing.get_args(ProviderName))
 
+    # eth-cluster is a valid backend provider (the ETH student cluster over an
+    # SSH tunnel) but is deliberately not offered in the model dropdown; it stays
+    # reachable only via config/env. Everything else must match exactly so the
+    # combo and geoagent's ProviderName cannot drift silently.
+    ui_hidden = {"eth-cluster"}
+
     assert providers - valid == set(), "combo offers unknown provider(s)"
-    assert valid - providers == set(), "provider exists but is not offered in the combo"
+    assert (
+        valid - providers == ui_hidden
+    ), "provider list drifted from geoagent (besides intentionally hidden ones)"
 
 
 def test_every_offered_provider_has_a_default_model_entry() -> None:
@@ -323,7 +331,6 @@ def test_self_configuring_providers_default_to_a_blank_model() -> None:
     defaults = _plugin_constant("DEFAULT_MODELS")
 
     assert defaults["lmstudio"] == ""
-    assert defaults["eth-cluster"] == ""
 
 
 def test_a_blank_model_auto_detects_the_loaded_lmstudio_model(monkeypatch) -> None:
