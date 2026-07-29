@@ -113,7 +113,7 @@ git commit     : ${GIT_COMMIT}${GIT_DIRTY}
 built          : $(date -u '+%Y-%m-%d %H:%M UTC')
 built on       : $(uname -s) $(uname -m)
 
-Requires a KADAS build from 2026-06-23 or later; see INSTALL.md.
+Works on KADAS Albireo 2.x and 3.x; see INSTALL.md.
 Quote the git commit above when reporting a problem.
 EOF
 ok "provenance stamped (${GIT_COMMIT}${GIT_DIRTY})"

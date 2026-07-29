@@ -77,23 +77,49 @@ def _candidate_roots() -> list[str]:
     return roots
 
 
-# The annotation rewrite (kadas-albireo2 commit 78efe485, "Annotation refactoring
-# (#455)", 2026-06-23) replaced KadasItemLayer + mapitems/ with stock
-# QgsAnnotationLayer + Kadas*AnnotationItem. No tagged release contains it:
-# v2.3.20, the newest 2.x tag, still ships the old API *and* builds against Qt5.
-# GeoAgent's whole annotation surface is written against the new classes, so on an
-# older KADAS every annotation tool would import-fail at call time -- the agent
-# would offer 15 tools and get an ImportError from each. Refuse up front instead.
-_REQUIRED_ANNOTATION_CLASS = "KadasAnnotationLayerHelpers"
+# GeoAgent supports both KADAS annotation generations (geoagent.tools.kadas picks
+# the right one at runtime):
+#
+#   * Kadas 3 (kadas-albireo2 master, post commit 78efe485 "Annotation refactoring
+#     (#455)", 2026-06-23): stock QgsAnnotationLayer + Kadas*AnnotationItem, keyed
+#     by the presence of KadasAnnotationLayerHelpers.
+#   * Kadas 2 (the released 2.x line, up to v2.3.20, Qt5): the older KadasItemLayer
+#     + mapitems/ plugin-layer API, keyed by the presence of KadasItemLayer.
+#
+# The plugin loads whenever *either* API is present; it only refuses on a build
+# that has neither (which is not a real KADAS at all).
+_NEW_ANNOTATION_CLASS = "KadasAnnotationLayerHelpers"
+_LEGACY_ANNOTATION_CLASS = "KadasItemLayer"
 
 
-def has_kadas_annotation_api() -> bool:
-    """True when this KADAS ships the QgsAnnotationLayer-based annotation API."""
+def _kadasgui_module():
+    """Import ``kadas.kadasgui`` or return ``None`` when unavailable."""
     try:
-        module = importlib.import_module("kadas.kadasgui")
+        return importlib.import_module("kadas.kadasgui")
     except Exception:
+        return None
+
+
+def has_new_annotation_api() -> bool:
+    """True when this KADAS ships the Kadas-3 QgsAnnotationLayer annotation API."""
+    module = _kadasgui_module()
+    return bool(module) and hasattr(module, _NEW_ANNOTATION_CLASS)
+
+
+def has_legacy_annotation_api() -> bool:
+    """True when this KADAS ships the Kadas-2 KadasItemLayer annotation API."""
+    module = _kadasgui_module()
+    return bool(module) and hasattr(module, _LEGACY_ANNOTATION_CLASS)
+
+
+def has_kadas_annotation_support() -> bool:
+    """True when either the Kadas-2 or Kadas-3 annotation API is present."""
+    module = _kadasgui_module()
+    if module is None:
         return False
-    return hasattr(module, _REQUIRED_ANNOTATION_CLASS)
+    return hasattr(module, _NEW_ANNOTATION_CLASS) or hasattr(
+        module, _LEGACY_ANNOTATION_CLASS
+    )
 
 
 def ensure_open_geoagent_importable() -> Optional[str]:

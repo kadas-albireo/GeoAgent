@@ -1,12 +1,20 @@
-"""Tests for the KADAS version gate.
+"""Tests for the KADAS annotation-API detection used by the plugin gate.
 
-GeoAgent's annotation surface targets the QgsAnnotationLayer-based API added by
-kadas-albireo2 commit 78efe485 ("Annotation refactoring", 2026-06-23). No tagged
-release contains it: v2.3.20 still ships KadasItemLayer + mapitems/ on Qt5. On
-such a build every annotation tool import-fails at call time, so the plugin must
-refuse to load instead of offering tools that cannot work.
+GeoAgent supports both KADAS annotation generations and picks the right one at
+runtime (see ``geoagent.tools.kadas``):
 
-The probe is loaded from source rather than imported: ``_shared`` lives in the
+* **Kadas 3** (post 2026-06-23, ``kadas-albireo2`` master): stock
+  ``QgsAnnotationLayer`` + ``Kadas*AnnotationItem``, keyed by the presence of
+  ``KadasAnnotationLayerHelpers``.
+* **Kadas 2** (the released 2.x line up to ``v2.3.20``, Qt5): the older
+  ``KadasItemLayer`` + ``mapitems/`` API, keyed by the presence of
+  ``KadasItemLayer``.
+
+The plugin loads whenever *either* API is present, so
+``has_kadas_annotation_support`` must be true for both generations and false
+only when neither class exists (i.e. not a real KADAS).
+
+The probes are loaded from source rather than imported: ``_shared`` lives in the
 plugin package, which is not importable without KADAS on the path.
 """
 
@@ -27,27 +35,31 @@ _SHARED = (
     / "_shared.py"
 )
 
+_PROBE_FUNCS = (
+    "_kadasgui_module",
+    "has_new_annotation_api",
+    "has_legacy_annotation_api",
+    "has_kadas_annotation_support",
+)
 
-def _load_probe():
-    """Return ``has_kadas_annotation_api`` extracted from ``_shared.py``."""
+
+def _load_probes() -> dict:
+    """Return the annotation-detection helpers extracted from ``_shared.py``."""
     tree = ast.parse(_SHARED.read_text(encoding="utf-8"))
     keep = [
         node
         for node in tree.body
         if isinstance(node, ast.Assign)
-        or (
-            isinstance(node, ast.FunctionDef)
-            and node.name == "has_kadas_annotation_api"
-        )
+        or (isinstance(node, ast.FunctionDef) and node.name in _PROBE_FUNCS)
     ]
     namespace: dict = {"importlib": importlib}
     exec(compile(ast.Module(body=keep, type_ignores=[]), "<probe>", "exec"), namespace)
-    return namespace["has_kadas_annotation_api"]
+    return namespace
 
 
 @pytest.fixture
-def probe():
-    return _load_probe()
+def probes():
+    return _load_probes()
 
 
 @pytest.fixture
@@ -67,33 +79,35 @@ def fake_kadasgui(monkeypatch):
     return _install
 
 
-def test_absent_kadas_is_unsupported(probe, monkeypatch):
+def test_absent_kadas_is_unsupported(probes, monkeypatch):
     """Plain CI / QGIS has no kadas package at all."""
     monkeypatch.setitem(sys.modules, "kadas", None)
-    assert probe() is False
+    assert probes["has_kadas_annotation_support"]() is False
+    assert probes["has_new_annotation_api"]() is False
+    assert probes["has_legacy_annotation_api"]() is False
 
 
-def test_old_kadas_2x_is_rejected(probe, fake_kadasgui):
-    """v2.3.20 exposes KadasItemLayer and the mapitems/ classes, not the new API."""
+def test_kadas_2x_is_supported_via_legacy_api(probes, fake_kadasgui):
+    """v2.3.20 exposes KadasItemLayer + the mapitems/ classes, not the new API."""
     fake_kadasgui(KadasItemLayer=object, KadasCircleItem=object, KadasTextItem=object)
-    assert probe() is False
+    assert probes["has_kadas_annotation_support"]() is True
+    assert probes["has_legacy_annotation_api"]() is True
+    assert probes["has_new_annotation_api"]() is False
 
 
-def test_new_kadas_is_accepted(probe, fake_kadasgui):
+def test_kadas_3_is_supported_via_new_api(probes, fake_kadasgui):
     """Post-refactor builds expose KadasAnnotationLayerHelpers."""
     fake_kadasgui(
         KadasAnnotationLayerHelpers=object,
         KadasCircleAnnotationItem=object,
     )
-    assert probe() is True
+    assert probes["has_kadas_annotation_support"]() is True
+    assert probes["has_new_annotation_api"]() is True
 
 
-def test_probe_keys_on_the_class_geoagent_actually_needs(probe, fake_kadasgui):
-    """A build with the new items but no helpers is still unsupported.
-
-    kadas.py calls KadasAnnotationLayerHelpers.createLayer to get a layer that
-    carries KADAS' parametric-annotation metadata, so that class is the real
-    requirement, not just the item subclasses.
-    """
-    fake_kadasgui(KadasCircleAnnotationItem=object)
-    assert probe() is False
+def test_build_with_neither_api_is_unsupported(probes, fake_kadasgui):
+    """A kadasgui module exposing neither annotation class is not a real KADAS."""
+    fake_kadasgui(SomeUnrelatedClass=object)
+    assert probes["has_kadas_annotation_support"]() is False
+    assert probes["has_new_annotation_api"]() is False
+    assert probes["has_legacy_annotation_api"]() is False

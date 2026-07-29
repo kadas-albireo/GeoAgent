@@ -11,11 +11,21 @@ have to hand-write KADAS Python through ``run_pyqgis_script`` and hope it knows
 the API.
 
 .. note::
-   The old ``KadasItemLayer`` / ``Kadas*Item`` plugin-layer API is **deprecated**
-   and is deliberately *not* used here. Annotations now live on a stock
-   :class:`QgsAnnotationLayer`; the layer itself has no KADAS subclass, and
-   KADAS-specific behaviour is provided by free-standing helpers
-   (``KadasAnnotationLayerHelpers``) and the item subclasses above.
+   Two KADAS generations are supported at runtime:
+
+   * **Kadas 3** (the post 2026-06-23 builds, ``kadas-albireo2`` master): stock
+     :class:`QgsAnnotationLayer` + ``Kadas*AnnotationItem`` + the free-standing
+     ``KadasAnnotationLayerHelpers``. This is the preferred path.
+   * **Kadas 2** (the released 2.x line, up to ``v2.3.20``): the older
+     ``KadasItemLayer`` + ``Kadas*Item`` (``mapitems/``) plugin-layer API, where
+     items are built with ``item.addPartFromGeometry(geom)`` and styled with
+     ``setOutline(QPen)`` / ``setFill(QBrush)`` rather than ``setSymbol()``.
+
+   Which API is live is detected once (``KadasAnnotationLayerHelpers`` present ->
+   Kadas 3, else ``KadasItemLayer`` present -> Kadas 2). The Kadas-2 path is
+   verified against the ``v2.3.20`` SIP bindings and
+   ``kadas/app/kml/kadaskmlimport.cpp``; like the Kadas-3 path it degrades to a
+   structured error rather than raising when a call fails.
 
 These tools expose that KADAS-native surface directly so the agent can *use
 KADAS' own annotations* rather than reverse-engineer them:
@@ -109,23 +119,78 @@ def kadas_tools(iface: Any = None, project: Optional[Any] = None) -> list[Any]:
 
         return QgsAnnotationLayer
 
-    def _get_or_create_layer() -> Any:
-        """Return the reusable ``GeoAgent Annotations`` :class:`QgsAnnotationLayer`.
+    def _annotation_layer_types() -> tuple:
+        """Return the layer classes that hold agent annotations, on any KADAS.
 
-        Prefers ``KadasAnnotationLayerHelpers.createLayer`` so the layer carries
-        the KADAS parametric-annotation metadata (and saves/loads correctly),
-        falling back to a bare ``QgsAnnotationLayer`` where the helper is
-        unavailable (plain QGIS / tests).
+        Kadas 3 uses :class:`QgsAnnotationLayer`; Kadas 2 uses ``KadasItemLayer``.
+        Either or both may be importable, so this collects whichever exist and
+        returns them as an ``isinstance`` tuple (empty outside QGIS/KADAS).
         """
-        annotation_cls = _annotation_layer_cls()
+        types: list = []
+        try:
+            from qgis.core import (  # type: ignore[import-not-found]
+                QgsAnnotationLayer,
+            )
+
+            types.append(QgsAnnotationLayer)
+        except Exception:
+            pass
+        try:
+            from kadas.kadasgui import (  # type: ignore[import-not-found]
+                KadasItemLayer,
+            )
+
+            types.append(KadasItemLayer)
+        except Exception:
+            pass
+        return tuple(types)
+
+    def _legacy() -> bool:
+        """True on the Kadas 2.x line (KadasItemLayer, no annotation helpers).
+
+        The new API is preferred whenever present: a build that ships
+        ``KadasAnnotationLayerHelpers`` is treated as Kadas 3 even if the old
+        ``KadasItemLayer`` also still exists.
+        """
+        try:
+            import importlib
+
+            mod = importlib.import_module("kadas.kadasgui")
+        except Exception:
+            return False
+        return not hasattr(mod, "KadasAnnotationLayerHelpers") and hasattr(
+            mod, "KadasItemLayer"
+        )
+
+    def _get_or_create_layer() -> Any:
+        """Return the reusable ``GeoAgent Annotations`` annotation layer.
+
+        On Kadas 3 this is a :class:`QgsAnnotationLayer` (made through
+        ``KadasAnnotationLayerHelpers.createLayer`` when available so it carries
+        the KADAS parametric-annotation metadata, else a bare one for plain QGIS
+        / tests). On Kadas 2 it is a ``KadasItemLayer`` instead. Both are named
+        ``GeoAgent Annotations`` and use EPSG:3857.
+        """
         proj = _project()
+        layer_types = _annotation_layer_types()
         for layer in proj.mapLayers().values():
             if (
-                isinstance(layer, annotation_cls)
+                layer_types
+                and isinstance(layer, layer_types)
                 and layer.name() == ANNOTATION_LAYER_NAME
             ):
                 return layer
 
+        if _legacy():
+            from kadas.kadasgui import (  # type: ignore[import-not-found]
+                KadasItemLayer,
+            )
+
+            layer = KadasItemLayer(ANNOTATION_LAYER_NAME, _crs(_LAYER_CRS))
+            proj.addMapLayer(layer)
+            return layer
+
+        annotation_cls = _annotation_layer_cls()
         layer = None
         try:
             from kadas.kadasgui import (  # type: ignore[import-not-found]
@@ -207,6 +272,188 @@ def kadas_tools(iface: Any = None, project: Optional[Any] = None) -> list[Any]:
         except Exception:
             pass
 
+    # -- Kadas 2.x (legacy KadasItemLayer) builders -------------------------
+    # On the released 2.x line annotations are KadasMapItem subclasses added to a
+    # KadasItemLayer via addPartFromGeometry(); there is no QgsAnnotationLayer and
+    # no setSymbol(). Circle/rectangle are drawn as ordinary KadasPolygonItem
+    # geometry (a metric-CRS polygon), which is the one item-construction path the
+    # v2.3.20 KML importer proves works from Python. Each helper is called from
+    # inside its tool's try/except, so any failure still degrades to a structured
+    # error just like the Kadas-3 path.
+
+    def _circle_ring_xy(
+        cx: float, cy: float, radius: float, segments: int = 72
+    ) -> list[tuple[float, float]]:
+        """Approximate a circle as a closed polygon ring in the layer CRS."""
+        import math
+
+        pts = [
+            (
+                cx + radius * math.cos(2.0 * math.pi * i / segments),
+                cy + radius * math.sin(2.0 * math.pi * i / segments),
+            )
+            for i in range(segments)
+        ]
+        pts.append(pts[0])
+        return pts
+
+    def _legacy_style(
+        item: Any,
+        fill_color: str,
+        outline_color: str,
+        outline_width: float,
+        opacity: float,
+    ) -> None:
+        """Apply fill/outline to a legacy KadasGeometryItem (QPen/QBrush)."""
+        from qgis.PyQt.QtGui import (  # type: ignore[import-not-found]
+            QBrush,
+            QColor,
+            QPen,
+        )
+
+        fill = QColor(str(fill_color))
+        fill.setAlphaF(max(0.0, min(1.0, float(opacity))))
+        item.setOutline(QPen(QColor(str(outline_color)), float(outline_width)))
+        item.setFill(QBrush(fill))
+
+    def _legacy_add_marker(
+        lon: float, lat: float, label: Optional[str]
+    ) -> dict[str, Any]:
+        from kadas.kadasgui import KadasPointItem  # type: ignore[import-not-found]
+        from qgis.core import QgsPoint  # type: ignore[import-not-found]
+
+        layer = _get_or_create_layer()
+        x, y = _to_layer_xy(lon, lat)
+        item = KadasPointItem(_crs(_LAYER_CRS))
+        item.addPartFromGeometry(QgsPoint(x, y))
+        if label:
+            try:
+                item.setTooltip(str(label))
+            except Exception:
+                pass
+        layer.addItem(item)
+        _refresh()
+        return {"success": True, "lon": lon, "lat": lat, "label": label}
+
+    def _legacy_add_text_native(
+        x: float,
+        y: float,
+        text: str,
+        color: str = "#000000",
+        size: float = 10.0,
+        bold: bool = False,
+        italic: bool = False,
+        font_family: Optional[str] = None,
+    ) -> None:
+        """Add a legacy KadasTextItem at a layer-CRS (EPSG:3857) point."""
+        from kadas.kadasgui import (  # type: ignore[import-not-found]
+            KadasItemPos,
+            KadasTextItem,
+        )
+        from qgis.PyQt.QtGui import QColor, QFont  # type: ignore[import-not-found]
+
+        layer = _get_or_create_layer()
+        item = KadasTextItem(_crs(_LAYER_CRS))
+        item.setText(str(text))
+        item.setFillColor(QColor(str(color)))
+        font = QFont()
+        if font_family:
+            font.setFamily(str(font_family))
+        font.setPointSizeF(float(size))
+        font.setBold(bool(bold))
+        font.setItalic(bool(italic))
+        item.setFont(font)
+        item.setPosition(KadasItemPos(float(x), float(y)))
+        layer.addItem(item)
+
+    def _legacy_add_text(
+        lon: float,
+        lat: float,
+        text: str,
+        color: str,
+        size: float,
+        bold: bool,
+        italic: bool,
+        font_family: Optional[str],
+    ) -> dict[str, Any]:
+        x, y = _to_layer_xy(lon, lat)
+        _legacy_add_text_native(x, y, text, color, size, bold, italic, font_family)
+        _refresh()
+        return {"success": True, "lon": lon, "lat": lat, "text": text}
+
+    def _legacy_add_polygon_item(
+        ring_xy: list[tuple[float, float]],
+        fill_color: str,
+        outline_color: str,
+        outline_width: float,
+        opacity: float,
+    ) -> None:
+        """Add a filled KadasPolygonItem from a closed layer-CRS ring."""
+        from kadas.kadasgui import KadasPolygonItem  # type: ignore[import-not-found]
+
+        layer = _get_or_create_layer()
+        item = KadasPolygonItem(_crs(_LAYER_CRS))
+        item.addPartFromGeometry(_polygon_geometry(ring_xy))
+        _legacy_style(item, fill_color, outline_color, outline_width, opacity)
+        layer.addItem(item)
+
+    def _legacy_add_gpx_waypoint(
+        lon: float, lat: float, name: Optional[str]
+    ) -> dict[str, Any]:
+        from kadas.kadasgui import (  # type: ignore[import-not-found]
+            KadasGpxWaypointItem,
+        )
+        from qgis.core import QgsPoint  # type: ignore[import-not-found]
+
+        # GPX items carry their own WGS84 CRS, so geometry is raw lon/lat.
+        layer = _get_or_create_layer()
+        item = KadasGpxWaypointItem()
+        if name:
+            item.setName(str(name))
+        item.addPartFromGeometry(QgsPoint(float(lon), float(lat)))
+        layer.addItem(item)
+        _refresh()
+        return {"success": True, "lon": lon, "lat": lat, "name": name}
+
+    def _legacy_add_gpx_route(
+        lonlat: list[tuple[float, float]], name: Optional[str], number: Optional[str]
+    ) -> dict[str, Any]:
+        from kadas.kadasgui import (  # type: ignore[import-not-found]
+            KadasGpxRouteItem,
+        )
+        from qgis.core import (  # type: ignore[import-not-found]
+            QgsLineString,
+            QgsPoint,
+        )
+
+        layer = _get_or_create_layer()
+        line = QgsLineString([QgsPoint(lon, lat) for lon, lat in lonlat])
+        item = KadasGpxRouteItem()
+        if name:
+            item.setName(str(name))
+        if number:
+            item.setNumber(str(number))
+        item.addPartFromGeometry(line)
+        layer.addItem(item)
+        _refresh()
+        return {"success": True, "points": len(lonlat), "name": name}
+
+    def _legacy_add_svg_marker(lon: float, lat: float, svg_path: str) -> dict[str, Any]:
+        from kadas.kadasgui import (  # type: ignore[import-not-found]
+            KadasItemPos,
+            KadasSymbolItem,
+        )
+        from qgis.core import QgsPointXY  # type: ignore[import-not-found]
+
+        layer = _get_or_create_layer()
+        x, y = _to_layer_xy(lon, lat)
+        item = KadasSymbolItem(_crs(_LAYER_CRS))
+        item.setFilePath(str(svg_path))
+        item.setPosition(KadasItemPos.fromPoint(QgsPointXY(x, y)))
+        layer.addItem(item)
+        _refresh()
+        return {"success": True, "lon": lon, "lat": lat, "svg_path": str(svg_path)}
+
     @geo_tool(category="kadas", available_in=("full", "fast"))
     def add_gpx_waypoint(
         lon: float,
@@ -236,6 +483,8 @@ def kadas_tools(iface: Any = None, project: Optional[Any] = None) -> list[Any]:
 
         def _run() -> dict[str, Any]:
             try:
+                if _legacy():
+                    return _legacy_add_gpx_waypoint(lon, lat, name)
                 from kadas.kadasgui import (  # type: ignore[import-not-found]
                     KadasGpxWaypointAnnotationItem,
                 )
@@ -293,6 +542,16 @@ def kadas_tools(iface: Any = None, project: Optional[Any] = None) -> list[Any]:
 
         def _run() -> dict[str, Any]:
             try:
+                if _legacy():
+                    legacy_lonlat = [
+                        (float(p[0]), float(p[1])) for p in coordinates if len(p) >= 2
+                    ]
+                    if len(legacy_lonlat) < 2:
+                        return {
+                            "success": False,
+                            "error": "A route needs at least 2 points.",
+                        }
+                    return _legacy_add_gpx_route(legacy_lonlat, name, number)
                 from kadas.kadasgui import (  # type: ignore[import-not-found]
                     KadasGpxRouteAnnotationItem,
                 )
@@ -357,6 +616,8 @@ def kadas_tools(iface: Any = None, project: Optional[Any] = None) -> list[Any]:
 
         def _run() -> dict[str, Any]:
             try:
+                if _legacy():
+                    return _legacy_add_svg_marker(lon, lat, svg_path)
                 from qgis.core import (  # type: ignore[import-not-found]
                     QgsAnnotationMarkerItem,
                     QgsMarkerSymbol,
@@ -403,11 +664,30 @@ def kadas_tools(iface: Any = None, project: Optional[Any] = None) -> list[Any]:
 
         def _run() -> dict[str, Any]:
             try:
+                layer = _get_or_create_layer()
+                if _legacy():
+                    # Legacy item ids are ints; the tooltip lives on the item.
+                    items = layer.items()
+                    try:
+                        key: Any = int(item_id)
+                    except (TypeError, ValueError):
+                        key = item_id
+                    item = items.get(key)
+                    if item is None:
+                        return {
+                            "success": False,
+                            "error": (
+                                f"No item {item_id!r} on {ANNOTATION_LAYER_NAME}."
+                            ),
+                        }
+                    item.setTooltip(str(tooltip))
+                    _refresh()
+                    return {"success": True, "item_id": str(item_id)}
+
                 from kadas.kadasgui import (  # type: ignore[import-not-found]
                     KadasAnnotationLayerHelpers,
                 )
 
-                layer = _get_or_create_layer()
                 if str(item_id) not in layer.items():
                     return {
                         "success": False,
@@ -440,6 +720,8 @@ def kadas_tools(iface: Any = None, project: Optional[Any] = None) -> list[Any]:
 
         def _run() -> dict[str, Any]:
             try:
+                if _legacy():
+                    return _legacy_add_marker(lon, lat, label)
                 from kadas.kadasgui import (  # type: ignore[import-not-found]
                     KadasPinAnnotationItem,
                 )
@@ -490,6 +772,10 @@ def kadas_tools(iface: Any = None, project: Optional[Any] = None) -> list[Any]:
 
         def _run() -> dict[str, Any]:
             try:
+                if _legacy():
+                    return _legacy_add_text(
+                        lon, lat, text, color, size, bold, italic, font_family
+                    )
                 from qgis.core import (  # type: ignore[import-not-found]
                     QgsAnnotationPointTextItem,
                     QgsPointXY,
@@ -553,6 +839,22 @@ def kadas_tools(iface: Any = None, project: Optional[Any] = None) -> list[Any]:
 
         def _run() -> dict[str, Any]:
             try:
+                if _legacy():
+                    cx, cy = _to_layer_xy(lon, lat)
+                    _legacy_add_polygon_item(
+                        _circle_ring_xy(cx, cy, float(radius_m)),
+                        fill_color,
+                        outline_color,
+                        outline_width,
+                        opacity,
+                    )
+                    _refresh()
+                    return {
+                        "success": True,
+                        "lon": lon,
+                        "lat": lat,
+                        "radius_m": radius_m,
+                    }
                 from kadas.kadasgui import (  # type: ignore[import-not-found]
                     KadasCircleAnnotationItem,
                 )
@@ -609,6 +911,24 @@ def kadas_tools(iface: Any = None, project: Optional[Any] = None) -> list[Any]:
 
         def _run() -> dict[str, Any]:
             try:
+                if _legacy():
+                    minx, miny = _to_layer_xy(min_lon, min_lat)
+                    maxx, maxy = _to_layer_xy(max_lon, max_lat)
+                    ring = [
+                        (minx, miny),
+                        (maxx, miny),
+                        (maxx, maxy),
+                        (minx, maxy),
+                        (minx, miny),
+                    ]
+                    _legacy_add_polygon_item(
+                        ring, fill_color, outline_color, outline_width, opacity
+                    )
+                    _refresh()
+                    return {
+                        "success": True,
+                        "bbox": [min_lon, min_lat, max_lon, max_lat],
+                    }
                 from kadas.kadasgui import (  # type: ignore[import-not-found]
                     KadasRectangleAnnotationItem,
                 )
@@ -665,12 +985,6 @@ def kadas_tools(iface: Any = None, project: Optional[Any] = None) -> list[Any]:
 
         def _run() -> dict[str, Any]:
             try:
-                from qgis.core import (  # type: ignore[import-not-found]
-                    QgsAnnotationPointTextItem,
-                    QgsAnnotationPolygonItem,
-                    QgsPointXY,
-                )
-
                 lonlat = [
                     (float(p[0]), float(p[1])) for p in coordinates if len(p) >= 2
                 ]
@@ -682,6 +996,26 @@ def kadas_tools(iface: Any = None, project: Optional[Any] = None) -> list[Any]:
                 pts = [_to_layer_xy(lon, lat) for lon, lat in lonlat]
                 if pts[0] != pts[-1]:
                     pts.append(pts[0])
+
+                if _legacy():
+                    _legacy_add_polygon_item(
+                        pts, fill_color, outline_color, outline_width, opacity
+                    )
+                    if label:
+                        # pts are already in the layer CRS, so place the label
+                        # directly at the centroid without re-transforming.
+                        cx = sum(x for x, _ in pts[:-1]) / (len(pts) - 1)
+                        cy = sum(y for _, y in pts[:-1]) / (len(pts) - 1)
+                        _legacy_add_text_native(cx, cy, str(label))
+                    _refresh()
+                    return {"success": True, "vertices": len(pts) - 1, "label": label}
+
+                from qgis.core import (  # type: ignore[import-not-found]
+                    QgsAnnotationPointTextItem,
+                    QgsAnnotationPolygonItem,
+                    QgsPointXY,
+                )
+
                 geom = _polygon_geometry(pts)
 
                 layer = _get_or_create_layer()
@@ -713,12 +1047,13 @@ def kadas_tools(iface: Any = None, project: Optional[Any] = None) -> list[Any]:
 
         def _run() -> dict[str, Any]:
             try:
-                annotation_cls = _annotation_layer_cls()
+                layer_types = _annotation_layer_types()
                 proj = _project()
                 removed = 0
                 for layer in list(proj.mapLayers().values()):
                     if (
-                        isinstance(layer, annotation_cls)
+                        layer_types
+                        and isinstance(layer, layer_types)
                         and layer.name() == ANNOTATION_LAYER_NAME
                     ):
                         try:
@@ -748,11 +1083,11 @@ def kadas_tools(iface: Any = None, project: Optional[Any] = None) -> list[Any]:
 
         def _run() -> dict[str, Any]:
             try:
-                annotation_cls = _annotation_layer_cls()
+                layer_types = _annotation_layer_types()
                 proj = _project()
                 out: list[dict[str, Any]] = []
                 for layer in proj.mapLayers().values():
-                    if not isinstance(layer, annotation_cls):
+                    if not (layer_types and isinstance(layer, layer_types)):
                         continue
                     try:
                         count = len(layer.items())
@@ -774,9 +1109,10 @@ def kadas_tools(iface: Any = None, project: Optional[Any] = None) -> list[Any]:
     def _item_layer_xy(item: Any) -> Optional[tuple[float, float]]:
         """Return an item's representative point in the layer CRS, or ``None``.
 
-        Covers every annotation item type: ``center()`` (circle/rectangle),
-        ``point()`` (point-text), and ``geometry()`` which returns a point for
-        marker/pin items and a polygon (→ centroid) for shapes.
+        Covers every annotation item type on both KADAS generations:
+        ``center()`` (circle/rectangle), ``point()`` (point-text), ``geometry()``
+        (marker/pin -> point, shapes -> polygon centroid), and ``position()``
+        (Kadas-2 anchored items: text and SVG symbols, a ``KadasItemPos``).
         """
         getter = getattr(item, "center", None)
         if callable(getter):
@@ -800,6 +1136,13 @@ def kadas_tools(iface: Any = None, project: Optional[Any] = None) -> list[Any]:
                     return geom.x(), geom.y()
                 centroid: Any = geom.centroid()
                 return centroid.x(), centroid.y()
+            except Exception:
+                pass
+        getter = getattr(item, "position", None)
+        if callable(getter):
+            try:
+                pt = getter()
+                return pt.x(), pt.y()
             except Exception:
                 pass
         return None
@@ -1051,11 +1394,15 @@ def kadas_tools(iface: Any = None, project: Optional[Any] = None) -> list[Any]:
                     QgsProject,
                 )
 
-                annotation_cls = _annotation_layer_cls()
+                layer_types = _annotation_layer_types()
                 proj = _project()
                 layer = None
                 for lyr in proj.mapLayers().values():
-                    if isinstance(lyr, annotation_cls) and lyr.name() == layer_name:
+                    if (
+                        layer_types
+                        and isinstance(lyr, layer_types)
+                        and lyr.name() == layer_name
+                    ):
                         layer = lyr
                         break
                 if layer is None:
@@ -1065,8 +1412,21 @@ def kadas_tools(iface: Any = None, project: Optional[Any] = None) -> list[Any]:
                     }
 
                 wgs84 = QgsCoordinateReferenceSystem("EPSG:4326")
-                src = layer.crs()
-                transform = QgsCoordinateTransform(src, wgs84, QgsProject.instance())
+                layer_src = layer.crs()
+
+                def _item_src(it: Any) -> Any:
+                    # Kadas-2 items carry their own CRS (e.g. GPX items are WGS84
+                    # even on a 3857 layer); Kadas-3 annotation items do not, so
+                    # they fall back to the layer CRS.
+                    crs_getter = getattr(it, "crs", None)
+                    if callable(crs_getter):
+                        try:
+                            c = crs_getter()
+                            if c is not None and c.isValid():
+                                return c
+                        except Exception:
+                            pass
+                    return layer_src
 
                 items = layer.items()
                 records: list[dict[str, Any]] = []
@@ -1091,6 +1451,10 @@ def kadas_tools(iface: Any = None, project: Optional[Any] = None) -> list[Any]:
                     xy = _item_layer_xy(item)
                     if xy is not None:
                         try:
+                            src = _item_src(item)
+                            transform = QgsCoordinateTransform(
+                                src, wgs84, QgsProject.instance()
+                            )
                             pt = transform.transform(QgsPointXY(xy[0], xy[1]))
                             rec["lon"] = round(pt.x(), 7)
                             rec["lat"] = round(pt.y(), 7)
