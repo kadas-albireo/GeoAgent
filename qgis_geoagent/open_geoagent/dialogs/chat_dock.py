@@ -2715,7 +2715,8 @@ class ChatDockWidget(QDockWidget):
         )
         model_layout.addRow("Permissions:", self.permission_combo)
 
-        self.fast_check = QCheckBox("Fast mode")
+        # Fast mode lives only in the Settings dock now (it was duplicated here);
+        # the send path reads the persisted ``fast_mode`` setting directly.
         self.stream_check = QCheckBox("Stream output")
         self.auto_approve_tools_check = QCheckBox("Auto approve running tools")
         self.auto_approve_tools_check.setToolTip(
@@ -2724,11 +2725,10 @@ class ChatDockWidget(QDockWidget):
         self.stream_check.setToolTip(
             "Show model text as it arrives instead of waiting for the full response."
         )
-        # Stacked, not side-by-side: four checkboxes on one row made the dock's
-        # minimum width the sum of all four labels (~590px).
+        # Stacked, not side-by-side: checkboxes on one row made the dock's
+        # minimum width the sum of all their labels.
         mode_layout = QVBoxLayout()
         mode_layout.setContentsMargins(0, 0, 0, 0)
-        mode_layout.addWidget(self.fast_check)
         mode_layout.addWidget(self.stream_check)
         mode_layout.addWidget(self.auto_approve_tools_check)
         model_layout.addRow("", mode_layout)
@@ -2981,9 +2981,6 @@ class ChatDockWidget(QDockWidget):
             self.model_input.setText(model)
             self._apply_model_placeholder(self.provider_combo.currentText())
 
-            self.fast_check.setChecked(
-                _setting(self.settings, "fast_mode", False, bool)
-            )
             self.stream_check.setChecked(
                 _setting(self.settings, "stream_chat", True, bool)
             )
@@ -3029,9 +3026,6 @@ class ChatDockWidget(QDockWidget):
             self.model_input.setText(model)
         self.settings.setValue(f"{SETTINGS_PREFIX}provider", provider)
         self.settings.setValue(f"{SETTINGS_PREFIX}model", model)
-        self.settings.setValue(
-            f"{SETTINGS_PREFIX}fast_mode", self.fast_check.isChecked()
-        )
         self.settings.setValue(
             f"{SETTINGS_PREFIX}stream_chat", self.stream_check.isChecked()
         )
@@ -3188,7 +3182,7 @@ class ChatDockWidget(QDockWidget):
                 "include_geoai": mode == "GeoAI",
                 "include_hypercoast": mode == "HyperCoast",
                 "permission_profile": profile,
-                "fast": self.fast_check.isChecked(),
+                "fast": _setting(self.settings, "fast_mode", False, bool),
             }
             if mode == "STAC":
                 kwargs["exclude_tool_names"] = {"run_pyqgis_script"}
@@ -3739,7 +3733,7 @@ class ChatDockWidget(QDockWidget):
         )
         if model_id and not self.model_input.text().strip():
             self.model_input.setText(model_id)
-        fast = self.fast_check.isChecked()
+        fast = _setting(self.settings, "fast_mode", False, bool)
         stream = self.stream_check.isChecked()
         plan_first = self.plan_first_check.isChecked()
         auto_approve_tools = self.auto_approve_tools_check.isChecked()

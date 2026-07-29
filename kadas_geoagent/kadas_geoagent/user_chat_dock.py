@@ -149,6 +149,7 @@ def build_kadas_chat_dock_class():
     )
 
     from open_geoagent.dialogs.chat_dock import (
+        SETTINGS_PREFIX,
         ChatDockWidget,
         PromptTextEdit,
         _markdown_to_basic_html,
@@ -172,6 +173,9 @@ def build_kadas_chat_dock_class():
             self._feedback_logger = FeedbackLogger()
             # Path of a Markdown skill file to "upskill" the agent with.
             self._skill_file_path = ""
+            # Seed KADAS-appropriate defaults before the base class restores
+            # settings in super().__init__ (see the method for the rationale).
+            self._apply_kadas_defaults()
             super().__init__(iface, parent)
             self.setWindowTitle("KADAS GeoAgent")
             self._build_user_mode_ui()
@@ -180,6 +184,36 @@ def build_kadas_chat_dock_class():
             # Per product decision: always open in the simple user mode.
             self._set_developer_mode(False)
             self._sync_user_view()
+
+        # -- KADAS defaults ---------------------------------------------------
+
+        def _apply_kadas_defaults(self):
+            """Seed KADAS-appropriate settings the first time the dock is used.
+
+            KADAS ships as a turnkey product: the end user should not have to
+            open Developer mode and configure the engine before it works. These
+            are written to the shared OpenGeoAgent QSettings only when they are
+            still unset, so a developer who changes them in Developer mode keeps
+            their choice across restarts.
+
+            * agent_mode -> "KADAS": the KADAS tool surface (swisstopo, OSM,
+              annotations) rather than the generic QGIS one.
+            * permission_profile -> "Trusted auto-approve" and
+              auto_approve_tools -> True: the agent runs its tools without a
+              confirmation prompt on every step.
+            """
+            from qgis.PyQt.QtCore import QSettings
+
+            settings = QSettings()
+            defaults = {
+                "agent_mode": "KADAS",
+                "permission_profile": "Trusted auto-approve",
+                "auto_approve_tools": True,
+            }
+            for key, value in defaults.items():
+                full_key = f"{SETTINGS_PREFIX}{key}"
+                if settings.value(full_key) is None:
+                    settings.setValue(full_key, value)
 
         # -- UI construction --------------------------------------------------
 
