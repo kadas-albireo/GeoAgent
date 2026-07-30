@@ -195,7 +195,7 @@ def _set_symbol_outline_color(symbol: Any, color: Any) -> bool:
 
 
 _ACTIVE_QGIS_HILLSHADE_TASKS: list[Any] = []
-_QGIS_XYZ_URL_SAFE_CHARS = ":/{}"
+_QGIS_XYZ_URL_SAFE_CHARS = ":/"
 
 
 def _is_raster_layer(layer: Any) -> bool:
@@ -394,6 +394,10 @@ def _xyz_tile_uri(
         parts.append(f"zmin={int(zmin)}")
     if zmax is not None:
         parts.append(f"zmax={int(zmax)}")
+    # Strict QGIS builds (KADAS) reject a source with no CRS; XYZ tile pyramids
+    # are Web Mercator, so declare EPSG:3857 explicitly. Matches what QGIS itself
+    # serialises to project files.
+    parts.append("crs=EPSG:3857")
     return "&".join(parts)
 
 
@@ -1124,23 +1128,34 @@ def qgis_tools(iface: Any, project: Optional[Any] = None) -> list[Any]:
             )
 
             layer: Any | None = None
+            # Prefer iface.addRasterLayer for provider-backed XYZ sources: under
+            # KADAS this routes through the native addRasterLayerQuiet path (the
+            # same kApp->addRasterLayer a manual geocatalog click runs), which is
+            # what actually renders the layer on the KADAS canvas. A layer added
+            # via a bare QgsProject.addMapLayer is valid but stays blank in KADAS.
+            # (load_geoadmin_layer already loads this way.) Fall back to a direct
+            # QgsRasterLayer for vanilla QGIS / headless tests.
             try:
-                from qgis.core import QgsRasterLayer  # type: ignore[import-not-found]
+                layer = iface.addRasterLayer(uri, name, "wms")
+            except TypeError:
+                layer = iface.addRasterLayer(uri, name)
+            except Exception:
+                layer = None
 
-                candidate = QgsRasterLayer(uri, name, "wms")
-                if candidate is not None and (
-                    not hasattr(candidate, "isValid") or candidate.isValid()
-                ):
-                    _project().addMapLayer(candidate)
-                    layer = candidate
-            except ImportError:
-                pass
-
-            if layer is None:
+            if layer is None or (hasattr(layer, "isValid") and not layer.isValid()):
                 try:
-                    layer = iface.addRasterLayer(uri, name, "wms")
-                except TypeError:
-                    layer = iface.addRasterLayer(uri, name)
+                    from qgis.core import (  # type: ignore[import-not-found]
+                        QgsRasterLayer,
+                    )
+
+                    candidate = QgsRasterLayer(uri, name, "wms")
+                    if candidate is not None and (
+                        not hasattr(candidate, "isValid") or candidate.isValid()
+                    ):
+                        _project().addMapLayer(candidate)
+                        layer = candidate
+                except ImportError:
+                    pass
 
             if layer is None or (hasattr(layer, "isValid") and not layer.isValid()):
                 return f"Failed to load XYZ tile layer from {url!r}."
@@ -2045,8 +2060,69 @@ def qgis_tools(iface: Any, project: Optional[Any] = None) -> list[Any]:
 
         return _on_gui(_run)
 
+    @geo_tool(
+        category="qgis",
+        requires_confirmation=True,
+    )
+    def open_project(path: str) -> str:
+        """Open (load) a QGIS/KADAS project file, replacing the current project.
+
+        Reads a ``.qgs``/``.qgz`` project from disk into the running instance.
+        This replaces the currently loaded project, so unsaved changes are lost
+        unless ``save_project`` was called first.
+
+        Args:
+            path: Path to the ``.qgs`` or ``.qgz`` project file.
+
+        Returns:
+            A human-readable status string.
+        """
+
+        def _run() -> str:
+            """Run the worker body."""
+            out = Path(path).expanduser().resolve()
+            if not out.exists():
+                return f"Project file not found: {str(out)!r}."
+            proj = _project()
+            if not hasattr(proj, "read"):
+                return "Project object does not expose read()."
+            ok = proj.read(str(out))
+            if ok is False:
+                return f"Failed to open project {str(out)!r}."
+            return f"Opened project {str(out)}."
+
+        return _on_gui(_run)
+
+    @geo_tool(
+        category="qgis",
+        requires_confirmation=True,
+    )
+    def new_project() -> str:
+        """Create a new, empty project (clears the current one).
+
+        Equivalent to KADAS' File ▸ New. Clears all layers and project state.
+        Unsaved changes are lost, so call ``save_project`` first if needed. Use
+        this instead of a ``run_pyqgis_script`` that calls ``QgsProject.clear``.
+
+        Returns:
+            A human-readable status string.
+        """
+
+        def _run() -> str:
+            """Run the worker body."""
+            proj = _project()
+            if not hasattr(proj, "clear"):
+                return "Project object does not expose clear()."
+            proj.clear()
+            return "Created a new (empty) project."
+
+        return _on_gui(_run)
+
     return [
         list_project_layers,
+        new_project,
+        open_project,
+        save_project,
         get_active_layer,
         get_project_state,
         zoom_in,
@@ -2074,7 +2150,6 @@ def qgis_tools(iface: Any, project: Optional[Any] = None) -> list[Any]:
         open_attribute_table,
         refresh_canvas,
         run_pyqgis_script,
-        save_project,
     ]
 
 

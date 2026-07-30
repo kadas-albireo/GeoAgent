@@ -28,6 +28,10 @@ from geoagent.core.safety import (
     auto_approve_safe_only,
     build_interrupt_on,
 )
+from geoagent.core.telemetry import (
+    AgentTracer,
+    TraceHookProvider,
+)
 from geoagent.core.factory import (
     create_agent,
     for_anymap,
@@ -35,6 +39,7 @@ from geoagent.core.factory import (
     for_gee_data_catalogs,
     for_geoai,
     for_hypercoast,
+    for_kadas,
     for_leafmap,
     for_nasa_earthdata,
     for_nasa_opera,
@@ -61,6 +66,7 @@ __all__ = [
     "for_gee_data_catalogs",
     "for_geoai",
     "for_hypercoast",
+    "for_kadas",
     "for_leafmap",
     "for_nasa_earthdata",
     "for_nasa_opera",
@@ -78,6 +84,8 @@ __all__ = [
     "auto_approve_all",
     "auto_approve_safe_only",
     "build_interrupt_on",
+    "AgentTracer",
+    "TraceHookProvider",
     "resolve_model",
     "get_llm",
     "get_default_model",

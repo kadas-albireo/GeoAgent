@@ -1,0 +1,230 @@
+{
+  "$schema_version": "1",
+  "description": "Progressive QGIS/KADAS automation benchmarks for comparing Claude against raw and upskilled local models. Every tool name in 'expected_api_calls' and 'tools' was verified to exist in geoagent/tools/ on 2026-07-16.",
+  "conventions": {
+    "eval_criteria": "ADVISORY ONLY. These checks are a triage aid, not a verdict. A test is judged by a human looking at the screenshot and the raw output. See run_evals.py.",
+    "tools": "The tool subset this test needs. The runner narrows the agent's surface to it, because the full 62-tool surface costs ~10.6k tokens and overflows a local 8k-16k context. See research/hardware_limitations.md.",
+    "backend": "'kadas' requires a live KADAS window (KADAS-native annotations, MilX, geoadmin). 'qgis' would run against plain QGIS, but no test currently claims it.",
+    "crs": "KADAS is LV95/EPSG:2056 oriented. Lon/lat inputs are WGS84/EPSG:4326 unless stated."
+  },
+  "benchmarks": [
+    {
+      "id": "E01",
+      "difficulty": "easy",
+      "category": "Layer Management",
+      "backend": "kadas",
+      "prompt": "List all the layers currently loaded in the project.",
+      "expected_api_calls": ["list_project_layers"],
+      "tools": ["list_project_layers", "get_project_state"],
+      "eval_criteria": {
+        "tool_calls_include": ["list_project_layers"],
+        "max_tool_calls": 3,
+        "human_check": "Did it just answer, or did it wander off adding layers first? This is the smoke test: if a model fails E01 it cannot call a tool at all and the rest of the sweep is noise."
+      }
+    },
+    {
+      "id": "E02",
+      "difficulty": "easy",
+      "category": "Layer Management",
+      "backend": "kadas",
+      "prompt": "Add an OpenStreetMap basemap to the map.",
+      "expected_api_calls": ["add_osm_basemap"],
+      "tools": ["add_osm_basemap", "add_xyz_tile_layer", "list_project_layers"],
+      "eval_criteria": {
+        "tool_calls_include_any": ["add_osm_basemap", "add_xyz_tile_layer"],
+        "state": [{"probe": "layer_count_increased", "by_at_least": 1}],
+        "human_check": "Is a basemap visible in the screenshot? A model that hand-rolls add_xyz_tile_layer with a tile URL instead of using add_osm_basemap is a partial pass, and is exactly the gap a skill should close.",
+        "known_trap": "Earlier XYZ URI brace-escaping bugs made layers load but render blank. Trust the screenshot over the tool's success message."
+      }
+    },
+    {
+      "id": "E03",
+      "difficulty": "easy",
+      "category": "Coordinate Search",
+      "backend": "kadas",
+      "prompt": "Zoom the map to Zurich.",
+      "expected_api_calls": ["locate_and_zoom"],
+      "tools": ["locate_and_zoom", "search_location", "zoom_to_extent", "set_center"],
+      "eval_criteria": {
+        "tool_calls_include_any": ["locate_and_zoom", "search_location"],
+        "state": [{"probe": "canvas_extent_contains", "lonlat": [8.5417, 47.3769], "tolerance_m": 20000}],
+        "human_check": "Is Zurich actually centred and at a sensible scale? locate_and_zoom is one call; a model doing search_location then set_center then set_scale is working harder than needed."
+      }
+    },
+    {
+      "id": "E04",
+      "difficulty": "easy",
+      "category": "Layer Management",
+      "backend": "kadas",
+      "prompt": "Load the swisstopo national map (colour) background layer.",
+      "expected_api_calls": ["search_geoadmin_catalog", "load_geoadmin_layer"],
+      "tools": ["search_geoadmin_catalog", "load_geoadmin_layer", "get_geoadmin_layer_info", "list_project_layers"],
+      "eval_criteria": {
+        "tool_calls_include": ["load_geoadmin_layer"],
+        "state": [{"probe": "layer_count_increased", "by_at_least": 1}],
+        "human_check": "Did it search the catalog first, or guess a layer id? Guessing a swisstopo bodid from memory is the classic local-model failure here and the strongest argument for a geoadmin skill.",
+        "requires_network": true
+      }
+    },
+    {
+      "id": "E05",
+      "difficulty": "easy",
+      "category": "Coordinate Search",
+      "backend": "kadas",
+      "prompt": "Convert the WGS84 coordinates 8.5417, 47.3769 to Swiss LV95.",
+      "expected_api_calls": ["convert_coordinates"],
+      "tools": ["convert_coordinates"],
+      "eval_criteria": {
+        "tool_calls_include": ["convert_coordinates"],
+        "answer_contains_any": ["2683", "1247"],
+        "human_check": "Expected LV95 is roughly E 2683000, N 1247000. A model that computes this in its head instead of calling the tool must be marked FAIL even if the number looks right: it is guessing, and it will be wrong elsewhere."
+      }
+    },
+    {
+      "id": "M01",
+      "difficulty": "medium",
+      "category": "Layer Management",
+      "backend": "kadas",
+      "prompt": "Remove every layer from the project, then confirm it is empty.",
+      "expected_api_calls": ["list_project_layers", "remove_layer", "list_project_layers"],
+      "tools": ["list_project_layers", "remove_layer", "get_project_state"],
+      "eval_criteria": {
+        "tool_calls_include": ["remove_layer", "list_project_layers"],
+        "state": [{"probe": "layer_count_equals", "value": 0}],
+        "human_check": "Tests multi-step planning and loop-until-done. Does it enumerate first, then remove each, then verify? Or remove one and claim success?",
+        "destructive": true
+      }
+    },
+    {
+      "id": "M02",
+      "difficulty": "medium",
+      "category": "Drawing/Redlining",
+      "backend": "kadas",
+      "prompt": "Place a marker on Bern labelled 'HQ'.",
+      "expected_api_calls": ["locate_and_zoom", "add_map_marker"],
+      "tools": ["locate_and_zoom", "search_location", "add_map_marker", "add_text_annotation", "list_kadas_annotation_layers"],
+      "eval_criteria": {
+        "tool_calls_include": ["add_map_marker"],
+        "state": [{"probe": "canvas_extent_contains", "lonlat": [7.4474, 46.9480], "tolerance_m": 30000}],
+        "human_check": "Is the marker on Bern and labelled 'HQ'? Screenshot is authoritative: annotation tools report success even when the item renders off-screen. One call should do it — add_map_marker takes the label directly, so a model that adds a marker AND a separate add_text_annotation is doing redundant work.",
+        "known_trap": "VERIFIED signature: add_map_marker(lon*, lat*, label) — there is NO colour argument. The prompt deliberately does not ask for a colour. If you re-add 'red' to this prompt, every agent will either fail or lie about it; marker styling is a genuine tool-surface gap, not a model failure."
+      }
+    },
+    {
+      "id": "M03",
+      "difficulty": "medium",
+      "category": "Drawing/Redlining",
+      "backend": "kadas",
+      "prompt": "Draw a circle with a 5 km radius centred on Interlaken.",
+      "expected_api_calls": ["search_location", "add_map_circle"],
+      "tools": ["search_location", "locate_and_zoom", "add_map_circle", "convert_coordinates"],
+      "eval_criteria": {
+        "tool_calls_include": ["add_map_circle"],
+        "human_check": "Is the drawn circle actually 5 km across the map? add_map_circle(lon, lat, radius_m) names the unit in the argument, so this is easier than it looks; the failure to watch for is unit confusion (passing 5 instead of 5000) or lon/lat swapped, which puts the circle in the wrong hemisphere.",
+        "known_trap": "VERIFIED signature: add_map_circle(lon*, lat*, radius_m*) — takes WGS84 degrees for the centre and METRES for the radius. The argument name carries the unit, so a well-behaved model should get this right. If a local model still passes degrees as radius_m, that is a strong signal it is ignoring the schema."
+      }
+    },
+    {
+      "id": "M04",
+      "difficulty": "medium",
+      "category": "Terrain Analysis",
+      "backend": "kadas",
+      "prompt": "What is the elevation at the summit of the Matterhorn?",
+      "expected_api_calls": ["search_location", "get_elevation_at"],
+      "tools": ["search_location", "locate_and_zoom", "get_elevation_at", "convert_coordinates"],
+      "eval_criteria": {
+        "tool_calls_include": ["get_elevation_at"],
+        "answer_contains_any": ["447", "448"],
+        "human_check": "True summit is ~4478 m. Accept 4470-4490 (DTM sampling varies). A model that answers 4478 from memory without calling get_elevation_at is a FAIL: it did not query the terrain, it recalled a fact.",
+        "requires_network": true
+      }
+    },
+    {
+      "id": "M05",
+      "difficulty": "medium",
+      "category": "OSM",
+      "backend": "kadas",
+      "prompt": "Find all hospitals in Bern and add them to the map.",
+      "expected_api_calls": ["query_osm_features"],
+      "tools": ["query_osm_features", "search_location", "locate_and_zoom", "list_project_layers"],
+      "eval_criteria": {
+        "tool_calls_include": ["query_osm_features"],
+        "state": [{"probe": "layer_count_increased", "by_at_least": 1}],
+        "human_check": "Did it build a sane Overpass query (amenity=hospital, bbox around Bern)? Overpass rejects malformed QL loudly, so failures here are usually visible in the tool result.",
+        "requires_network": true
+      }
+    },
+    {
+      "id": "M06",
+      "difficulty": "medium",
+      "category": "Terrain Analysis",
+      "backend": "kadas",
+      "prompt": "Add a hillshade layer for the area around Grindelwald.",
+      "expected_api_calls": ["search_geoadmin_catalog", "load_geoadmin_layer", "create_hillshade_layer"],
+      "tools": ["search_geoadmin_catalog", "load_geoadmin_layer", "create_hillshade_layer", "locate_and_zoom", "list_project_layers"],
+      "eval_criteria": {
+        "tool_calls_include": ["create_hillshade_layer"],
+        "human_check": "Tests dependency reasoning: hillshade needs a DTM loaded first. Does the model realise it must load terrain before shading it, or does it call create_hillshade_layer against nothing?",
+        "requires_network": true
+      }
+    },
+    {
+      "id": "H01",
+      "difficulty": "hard",
+      "category": "Terrain Analysis",
+      "backend": "kadas",
+      "prompt": "Is there a clear line of sight from the summit of the Niesen to the summit of the Stockhorn?",
+      "expected_api_calls": ["search_location", "convert_coordinates", "check_line_of_sight"],
+      "tools": ["search_location", "convert_coordinates", "get_elevation_at", "check_line_of_sight", "locate_and_zoom"],
+      "eval_criteria": {
+        "tool_calls_include": ["check_line_of_sight"],
+        "human_check": "Multi-step: resolve two summits to coordinates, then run LOS and interpret the profile. Niesen ~2362 m, Stockhorn ~2190 m, ~15 km apart. VERIFIED signature: check_line_of_sight(observer_lon*, observer_lat*, target_lon*, target_lat*, observer_height_m, target_height_m, terrain_samples) — it takes WGS84 degrees, NOT LV95. The interesting failure is a model 'helpfully' converting to LV95 first and passing metres into a degrees argument, or swapping observer/target lon/lat.",
+        "requires_network": true
+      }
+    },
+    {
+      "id": "H02",
+      "difficulty": "hard",
+      "category": "MSS Military Symbols",
+      "backend": "kadas",
+      "prompt": "Place a friendly infantry unit MilX symbol at Thun.",
+      "expected_api_calls": ["list_kadas_actions", "trigger_kadas_action", "run_pyqgis_script"],
+      "tools": ["list_kadas_actions", "trigger_kadas_action", "search_location", "locate_and_zoom", "run_pyqgis_script", "list_kadas_annotation_layers", "get_kadas_layer_items"],
+      "eval_criteria": {
+        "tool_calls_include_any": ["list_kadas_actions", "run_pyqgis_script"],
+        "human_check": "EXPECTED TO FAIL FOR EVERY AGENT, Claude included. Do not read a failure here as a model deficiency. The ONLY reachable path is list_kadas_actions -> trigger_kadas_action, which activates a MilX map tool that then waits for interactive mouse input — so an agent cannot complete the placement unattended. Read the raw output for what it *attempted*; that is the design input for a real MilX tool.",
+        "measures": "tool-surface gap, not model capability",
+        "known_trap": "VERIFIED 2026-07-16: run_pyqgis_script AST-validates imports against _PYQGIS_ALLOWED_TOP_LEVEL = {'qgis', 'math'} (geoagent/tools/qgis.py:32), so `import kadasgui` is REJECTED. The PyQGIS route to KadasMilxAnnotationItem is closed by design. Conclusion is already known without running this: GeoAgent needs a first-class MilX tool. This test exists to document that gap, not to discover it."
+      }
+    },
+    {
+      "id": "H03",
+      "difficulty": "hard",
+      "category": "MSS Military Symbols",
+      "backend": "kadas",
+      "prompt": "List the MilX layers in this project and tell me how many symbols each contains.",
+      "expected_api_calls": ["list_kadas_annotation_layers", "get_kadas_layer_items"],
+      "tools": ["list_kadas_annotation_layers", "get_kadas_layer_items", "list_project_layers"],
+      "eval_criteria": {
+        "tool_calls_include_any": ["list_kadas_annotation_layers", "get_kadas_layer_items"],
+        "human_check": "Read-only counterpart to H02. Requires a project with MilX layers preloaded, otherwise the correct answer is 'none'. Tests whether the model reaches for the KADAS-native introspection tools rather than list_project_layers.",
+        "setup": "Load a .milx package before running, or expect an empty-but-correct answer."
+      }
+    },
+    {
+      "id": "H04",
+      "difficulty": "hard",
+      "category": "Terrain Analysis",
+      "backend": "kadas",
+      "prompt": "Create a 10 km buffer around Lake Thun, clip the swisstopo DTM to it, and tell me the highest point inside.",
+      "expected_api_calls": ["search_location", "load_geoadmin_layer", "run_processing_algorithm", "run_pyqgis_script"],
+      "tools": ["search_location", "locate_and_zoom", "load_geoadmin_layer", "search_geoadmin_catalog", "run_processing_algorithm", "list_processing_algorithms", "describe_processing_algorithm", "buffer_active_layer", "run_pyqgis_script", "list_project_layers"],
+      "eval_criteria": {
+        "tool_calls_include_any": ["run_processing_algorithm", "run_pyqgis_script"],
+        "human_check": "The hardest test: chain geocode -> buffer -> load DTM -> clip -> zonal max. Expect local models to fail entirely. Grade partial credit by how far down the chain it got, and record where it broke; that is the skill-authoring signal.",
+        "measures": "long-horizon multi-tool planning",
+        "requires_network": true
+      }
+    }
+  ]
+}

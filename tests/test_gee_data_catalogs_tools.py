@@ -42,8 +42,8 @@ def test_ee_xyz_uri_encodes_nested_query_parameters() -> None:
     )
 
     expected = (
-        "type=xyz&url=https://example.com/{z}/{x}/{y}"
-        "%3Ftoken%3Dabc%26expires%3D123&zmax=24&zmin=0"
+        "type=xyz&url=https://example.com/%7Bz%7D/%7Bx%7D/%7By%7D"
+        "%3Ftoken%3Dabc%26expires%3D123&zmax=24&zmin=0&crs=EPSG:3857"
     )
     assert uri == expected
 

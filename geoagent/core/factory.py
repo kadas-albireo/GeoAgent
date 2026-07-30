@@ -12,18 +12,26 @@ from geoagent.core.registry import (
     packages_available,
 )
 from geoagent.core.safety import ConfirmCallback
+from geoagent.core.telemetry import AgentTracer
 from geoagent.core.agent import GeoAgent
 from geoagent.tools.anymap import anymap_tools
 from geoagent.tools.browser_maplibre import browser_maplibre_tools
 from geoagent.tools.geoai import geoai_tools
 from geoagent.tools.gee_data_catalogs import gee_data_catalogs_tools
+from geoagent.tools.geoadmin import geoadmin_tools
 from geoagent.tools.hypercoast import hypercoast_tools
+from geoagent.tools.kadas import kadas_tools
+from geoagent.tools.kadas_terrain import kadas_terrain_tools
+from geoagent.tools.capabilities import capability_tools
+from geoagent.tools.external_files import external_files_tools
+from geoagent.tools.osm import osm_tools
 from geoagent.tools.images import image_generation_tools
 from geoagent.tools.leafmap import leafmap_tools
 from geoagent.tools.nasa_earthdata import earthdata_tools
 from geoagent.tools.nasa_opera import nasa_opera_tools
 from geoagent.tools.qgis import qgis_tools
 from geoagent.tools.stac import stac_tools
+from geoagent.tools.terminal import terminal_tools
 from geoagent.tools.timelapse import timelapse_tools
 from geoagent.tools.vantor import vantor_tools
 from geoagent.tools.whitebox import whitebox_tools
@@ -284,6 +292,145 @@ Workflow guidance:
   layer names when available.
 """
 
+KADAS_SYSTEM_PROMPT = """\
+You are an AI assistant embedded in KADAS Albireo 2 a QGIS-based mapping
+application used mainly with Swiss swisstopo geodata. You have the standard
+QGIS layer/canvas tools PLUS KADAS-specific tools for the swisstopo geoadmin
+catalog, place-name search, and KADAS-native map annotations. Prefer these
+dedicated tools over writing PyQGIS by hand.
+
+How KADAS operates (use this to choose tools):
+- KADAS does not ship a fixed layer list. The layer catalogue the user browses
+  is the live swisstopo geoadmin catalog (886 layers), and place search uses
+  the geoadmin SearchServer. Coordinates the user gives are WGS84 lon/lat;
+  Swiss local data is usually in LV95 (EPSG:2056). The default basemaps are
+  swisstopo WMTS tiles (national maps, SWISSIMAGE aerial, hillshade).
+
+Catalog & data loading:
+- To find a layer for a topic ("aerial photos", "electric stations", "property
+  boundaries", "railways"), call search_geoadmin_catalog to resolve the topic
+  to a layerBodId, then load_geoadmin_layer with that bod_id. Do not guess
+  bodIds.
+- load_geoadmin_layer is the ONLY correct way to add a swisstopo/geoadmin layer:
+  it loads via the official WMS service exactly like the KADAS geocatalog. NEVER
+  load swisstopo layers with add_xyz_tile_layer, add_raster_layer, or a
+  hand-built WMTS/XYZ tile URL (e.g. .../{z}/{x}/{y}.png). Those use the wrong
+  tiling scheme/CRS for the swisstopo grid and render as a blank layer. If
+  load_geoadmin_layer fails, report the error — do not fall back to a tile URL.
+- Known mappings you can use directly: aerial/SWISSIMAGE ->
+  ch.swisstopo.swissimage-product; national map (colour) ->
+  ch.swisstopo.pixelkarte-farbe; hillshade ->
+  ch.swisstopo.swissalti3d-reliefschattierung; cadastre/property boundaries ->
+  ch.kantone.cadastralwebmap-farbe.
+- For local files the user names, use the QGIS add_vector_layer /
+  add_raster_layer tools.
+- To measure distance between two loaded features, select them and use
+  run_processing_algorithm with native:shortestline.
+
+Place search / navigation:
+- To find a place ("Matterhorn", "Basel main station", "Thunplatz, Bern"), call
+  search_location to get WGS84 coordinates and a bbox, then center/zoom with the
+  QGIS set_center / zoom_to_extent tools, or use locate_and_zoom for a one-shot
+  recentre. Never fabricate coordinates.
+
+KADAS-native annotations (markers and shapes):
+- Use the dedicated KADAS tools, NOT QgsAnnotation or temporary vector layers:
+  add_map_marker (pins/markers), add_text_annotation (labels), add_map_circle
+  (radius in metres), add_map_rectangle (bbox), add_map_polygon. All take WGS84
+  lon/lat. clear_annotations removes the agent's annotation layer and requires
+  confirmation.
+- A common pattern is search_location -> add_map_marker to pin a named place.
+
+Reading KADAS-native layers (Pins, GPX, annotations):
+- These are QgsAnnotationLayer layers holding drawable KADAS annotation items,
+  not QGIS vector features, so list_project_layers only sees their extent/
+  bounding box. To
+  understand their contents — including each item's coordinates — call
+  list_kadas_annotation_layers to discover them, then get_kadas_layer_items(layer_name)
+  to read every item's type, label, and WGS84 lon/lat. Do not report only a
+  layer's bounding box when the user asks about the items inside it.
+
+OpenStreetMap data:
+- For an OSM backdrop call add_osm_basemap (style "standard"/"humanitarian"/
+  "cyclosm"). NEVER hand-build an OSM tile URL through add_xyz_tile_layer — the
+  dedicated tool uses the correct, well-formed source.
+- For actual OSM features (cafes, roads, buildings, ...) call
+  query_osm_features(tags, bbox): it runs an Overpass query in-process and loads
+  the result as native, selectable QGIS vector layers — not tiles. Pass tags
+  like {"amenity": "cafe"} and a WGS84 [min_lon, min_lat, max_lon, max_lat].
+
+Coordinates, elevation and terrain (KADAS-native):
+- convert_coordinates(lon, lat, target_format) formats a point as MGRS, UTM,
+  DegMinSec, DegMin, DecDeg or LV95 using KADAS' own formatter — use it instead
+  of hand-rolling coordinate maths. get_elevation_at(lon, lat) returns terrain
+  height in metres. check_line_of_sight(observer, target, heights) tests
+  observer→target visibility over the terrain.
+
+External reference folders (Developer mode):
+- If external folders are configured, list_external_roots shows them;
+  scan_external_folder and read_external_file browse/read files there (read-only,
+  sandboxed to the allowed roots). Use these instead of run_command for files
+  outside the project.
+- find_spatial_data searches those folders for spatial datasets (Shapefile,
+  GeoPackage, GeoJSON, KML, ...) and inspects each natively (geometry type,
+  feature count, CRS, fields) via QGIS' provider registry — use it to discover
+  local data before add_vector_layer, never hand-parse the files.
+
+Runtime awareness, plugins, export and logs (KADAS-native):
+- list_qgis_capabilities reports the active plugins, the loaded Processing
+  providers/algorithms and whether the KADAS modules are available. Call it when
+  unsure whether a capability exists here instead of guessing.
+- Discover, then act (do not reimplement plugins): list_processing_algorithms
+  (filter_text) and describe_processing_algorithm(algorithm_id) enumerate every
+  Processing algorithm — including ones from imported plugins — and give its
+  parameters, so you can build a valid parameters dict and run it with
+  run_processing_algorithm. Use these instead of guessing algorithm ids.
+- list_plugins() and describe_plugin(name) read a plugin's metadata and its
+  registered commands (label, menu, keyboard shortcut). For GUI-only plugins
+  (e.g. kadas_print, kadas_ephem) you cannot run them headlessly — use these to
+  tell the user exactly which menu/button/shortcut to use.
+- Native command bridge: list_kadas_actions(filter_text) enumerates KADAS's own
+  named commands (File/Map ops, map tools, plugin actions) and
+  trigger_kadas_action(name) runs one as if clicked (e.g. mActionSaveMapExtent =
+  Save Map, mActionCopy = Copy Map, mActionNew/mActionOpen/mActionSave,
+  mActionPrint). Prefer triggering the native action over writing a
+  run_pyqgis_script wrapper. Triggering opens the command's dialog when it needs
+  input — for a path/parameter you must pass programmatically, use the dedicated
+  headless tools below instead.
+- export_gpkg(output_path, layer_names) / import_gpkg(path) reuse the KADAS
+  kadas_gpkg plugin to round-trip a full-project GeoPackage (layers + project +
+  resources embedded), so styling and layout survive. Prefer these over ogr2ogr
+  or a per-layer dump. import_gpkg also loads plain GeoPackages.
+- export_layer(layer_name, output_path) writes a vector layer to a file (KML,
+  KMZ, GeoJSON, SHP, …) natively via OGR — prefer over a run_pyqgis_script.
+- new_project() / open_project(path) / save_project(path) create, load and save a
+  .qgs/.qgz project headlessly; use these instead of a run_pyqgis_script that
+  calls QgsProject.clear/read/write.
+- query_agent_logs(kind, contains) reads and filters the agent's own execution
+  and Training-AI feedback logs; use it to answer what the last run did or what
+  errored, rather than asking the user to open log files.
+
+- When a request truly has no dedicated tool (custom processing, raster
+  band/labeling tweaks), write a short PyQGIS script and run it with
+  run_pyqgis_script rather than refusing.
+- Keep responses concise and include the tool name, resolved bodId/coordinates,
+  and loaded layer or annotation names when available.
+"""
+
+TERMINAL_GUIDANCE = """\
+
+Terminal use:
+- run_command runs a shell command and returns its exit code and output. Use it
+  for external programs not covered by a QGIS tool, e.g. the GDAL/OGR CLI
+  utilities (gdalwarp, gdaldem, gdal_translate, ogr2ogr, ogrinfo). For QGIS
+  processing algorithms prefer run_processing_algorithm; for PyQGIS prefer
+  run_pyqgis_script.
+- Terminal use always needs user confirmation. Never run destructive shell
+  commands (recursive deletes of system/home paths, disk formatting, etc.);
+  they are blocked.
+"""
+
+
 WHITEBOX_SYSTEM_PROMPT = """\
 You are an AI assistant embedded in QGIS with access to WhiteboxTools.
 WhiteboxTools exposes hundreds of geospatial analysis commands through a
@@ -417,7 +564,7 @@ def _permission_allows_tool(permission_profile: str | None, tool: Any) -> bool:
         return True
     if profile == "Execute Scripts":
         return True
-    if name == "run_pyqgis_script":
+    if name in {"run_pyqgis_script", "run_command"}:
         return False
     if profile == "Run processing":
         return True
@@ -477,6 +624,13 @@ def assemble_tools(
     include_leafmap: bool = False,
     include_anymap: bool = False,
     include_qgis: bool = False,
+    include_geoadmin: bool = False,
+    include_kadas: bool = False,
+    include_capabilities: bool = False,
+    include_osm: bool = False,
+    include_external_files: bool = False,
+    external_roots: Optional[list[Any]] = None,
+    include_terminal: bool = False,
     include_nasa_earthdata: bool = False,
     include_nasa_opera: bool = False,
     include_gee_data_catalogs: bool = False,
@@ -512,6 +666,39 @@ def assemble_tools(
         qt = _filter_by_imports(qgis_tools(context.qgis_iface, context.qgis_project))
         register_all_tools(registry, qt)
         collected.extend(qt)
+    if include_geoadmin:
+        gat = _filter_by_imports(
+            geoadmin_tools(context.qgis_iface, context.qgis_project)
+        )
+        register_all_tools(registry, gat)
+        collected.extend(gat)
+    if include_kadas:
+        kt = _filter_by_imports(kadas_tools(context.qgis_iface, context.qgis_project))
+        register_all_tools(registry, kt)
+        collected.extend(kt)
+        ktt = _filter_by_imports(
+            kadas_terrain_tools(context.qgis_iface, context.qgis_project)
+        )
+        register_all_tools(registry, ktt)
+        collected.extend(ktt)
+    if include_capabilities:
+        ct = _filter_by_imports(
+            capability_tools(context.qgis_iface, context.qgis_project)
+        )
+        register_all_tools(registry, ct)
+        collected.extend(ct)
+    if include_osm:
+        ot = _filter_by_imports(osm_tools(context.qgis_iface, context.qgis_project))
+        register_all_tools(registry, ot)
+        collected.extend(ot)
+    if include_external_files:
+        eft = _filter_by_imports(external_files_tools(external_roots))
+        register_all_tools(registry, eft)
+        collected.extend(eft)
+    if include_terminal:
+        tt = _filter_by_imports(terminal_tools())
+        register_all_tools(registry, tt)
+        collected.extend(tt)
     if include_nasa_earthdata:
         earthdata_tool_list = _filter_by_imports(
             earthdata_tools(
@@ -776,16 +963,31 @@ def for_qgis(
     confirm: ConfirmCallback | None = None,
     extra_tools: Optional[list[Any]] = None,
     permission_profile: str | None = None,
+    include_terminal: bool = False,
+    enable_logging: bool = False,
+    tracer: AgentTracer | None = None,
 ) -> GeoAgent:
-    """Bind an agent to QGIS ``iface`` (and optional ``project``)."""
+    """Bind an agent to QGIS ``iface`` (and optional ``project``).
+
+    Args:
+        include_terminal: Expose the run_command terminal tool. Off by default
+            for vanilla QGIS; enable for shell-capable workflows.
+        enable_logging: Turn on full LLM-mode execution tracing. Ignored when
+            ``tracer`` is given.
+        tracer: An explicit :class:`~geoagent.core.telemetry.AgentTracer`.
+    """
+    system_prompt = QGIS_SYSTEM_PROMPT
+    if include_terminal:
+        system_prompt = system_prompt + TERMINAL_GUIDANCE
     ctx = GeoAgentContext(
         qgis_iface=iface,
         qgis_project=project,
-        metadata={"system_prompt": QGIS_SYSTEM_PROMPT},
+        metadata={"system_prompt": system_prompt},
     )
     tools, registry = assemble_tools(
         context=ctx,
         include_qgis=True,
+        include_terminal=include_terminal,
         include_image_generation=True,
         extra_tools=extra_tools,
         fast=fast,
@@ -796,6 +998,8 @@ def for_qgis(
         cfg = cfg.model_copy(update={"provider": provider})
     if model_id is not None:
         cfg = cfg.model_copy(update={"model": model_id})
+    if tracer is None and enable_logging:
+        tracer = AgentTracer()
     return GeoAgent(
         context=ctx,
         config=cfg,
@@ -807,6 +1011,88 @@ def for_qgis(
         fast=fast,
         confirm=confirm,
         qgis_safe_mode=True,
+        tracer=tracer,
+    )
+
+
+def for_kadas(
+    iface: Any,
+    project: Any = None,
+    *,
+    config: GeoAgentConfig | None = None,
+    model: Any | None = None,
+    provider: str | None = None,
+    model_id: str | None = None,
+    fast: bool = False,
+    confirm: ConfirmCallback | None = None,
+    extra_tools: Optional[list[Any]] = None,
+    permission_profile: str | None = None,
+    include_terminal: bool = True,
+    external_roots: Optional[list[Any]] = None,
+    enable_logging: bool = False,
+    tracer: AgentTracer | None = None,
+) -> GeoAgent:
+    """Bind an agent to KADAS Albireo 2.
+
+    Exposes the general QGIS map/project tools plus the KADAS-specific surface:
+    the swisstopo geoadmin catalog and location search
+    (:mod:`geoagent.tools.geoadmin`) and KADAS-native map annotations
+    (:mod:`geoagent.tools.kadas`). ``iface`` is typically a
+    :class:`~kadas_geoagent.kadas_iface_adapter.KadasIfaceAdapter`.
+
+    Args:
+        include_terminal: Expose the run_command terminal tool
+            (:func:`geoagent.tools.terminal.terminal_tools`).
+        enable_logging: Turn on full LLM-mode execution tracing to
+            ``~/.kadas/agent_execution.log``. Ignored when ``tracer`` is given.
+        tracer: An explicit :class:`~geoagent.core.telemetry.AgentTracer` to
+            record the turn into (e.g. a shared developer-console buffer).
+    """
+    system_prompt = KADAS_SYSTEM_PROMPT
+    if include_terminal:
+        system_prompt = system_prompt + TERMINAL_GUIDANCE
+    ctx = GeoAgentContext(
+        qgis_iface=iface,
+        qgis_project=project,
+        metadata={
+            "integration": "kadas",
+            "system_prompt": system_prompt,
+        },
+    )
+    tools, registry = assemble_tools(
+        context=ctx,
+        include_qgis=True,
+        include_geoadmin=True,
+        include_kadas=True,
+        include_capabilities=True,
+        include_osm=True,
+        include_external_files=True,
+        external_roots=external_roots,
+        include_terminal=include_terminal,
+        include_image_generation=True,
+        extra_tools=extra_tools,
+        fast=fast,
+        permission_profile=permission_profile,
+    )
+    cfg = config or GeoAgentConfig()
+    if provider is not None:
+        cfg = cfg.model_copy(update={"provider": provider})
+    if model_id is not None:
+        cfg = cfg.model_copy(update={"model": model_id})
+    if tracer is None and enable_logging:
+        tracer = AgentTracer()
+    return GeoAgent(
+        context=ctx,
+        config=cfg,
+        tools=tools,
+        registry=registry,
+        model=model,
+        provider=provider,
+        model_id=model_id,
+        fast=fast,
+        confirm=confirm,
+        qgis_safe_mode=True,
+        tracer=tracer,
     )
 
 
@@ -1325,6 +1611,7 @@ __all__ = [
     "for_gee_data_catalogs",
     "for_geoai",
     "for_hypercoast",
+    "for_kadas",
     "for_leafmap",
     "for_nasa_earthdata",
     "for_nasa_opera",

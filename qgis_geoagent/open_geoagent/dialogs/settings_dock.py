@@ -12,6 +12,7 @@ from qgis.PyQt.QtGui import (
     QFont,
     QGuiApplication,
     QKeySequence,
+    QPalette,
     QValidator,
 )
 from qgis.PyQt.QtWidgets import (
@@ -21,6 +22,7 @@ from qgis.PyQt.QtWidgets import (
     QDockWidget,
     QFileDialog,
     QFormLayout,
+    QFrame,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -29,6 +31,7 @@ from qgis.PyQt.QtWidgets import (
     QProgressBar,
     QPushButton,
     QKeySequenceEdit,
+    QScrollArea,
     QSpinBox,
     QTabWidget,
     QVBoxLayout,
@@ -44,6 +47,7 @@ from .chat_dock import (
     IMAGE_MODELS,
     MAX_TOKENS_AUTO_VALUE,
     PROVIDERS,
+    SELF_CONFIGURING_PROVIDERS,
     SETTINGS_PREFIX,
     TRANSCRIPTION_MODELS,
     VOICE_SHORTCUT_SETTING,
@@ -76,6 +80,24 @@ ENV_FALLBACKS = {
     "vllm_api_key": ("VLLM_API_KEY",),
     "vllm_base_url": ("VLLM_BASE_URL",),
 }
+
+
+# Theme-aware style fragments. Referencing ``palette(...)`` roles keeps notes,
+# status text and accent buttons consistent with the host application's theme
+# (KADAS / QGIS, light or dark) instead of hardcoding colors that clash with it.
+_MUTED_STYLE = "color: palette(mid); font-size: 10px;"
+_INFO_STYLE = "color: palette(highlight); font-size: 10px;"
+_ACCENT_BUTTON_STYLE = (
+    "QPushButton {"
+    " background-color: palette(highlight);"
+    " color: palette(highlightedtext);"
+    " font-weight: bold; padding: 6px 12px; border-radius: 4px;"
+    " }"
+    " QPushButton:hover { background-color: palette(dark); }"
+    " QPushButton:disabled {"
+    " background-color: palette(button); color: palette(mid);"
+    " }"
+)
 
 
 def _apply_environment_from_settings(settings):
@@ -426,17 +448,29 @@ class SettingsDockWidget(QDockWidget):
         self._setup_ui()
         self._load_settings()
 
+        # Keep the panel background opaque and on-theme even after the dock is
+        # floated ("popped out") and re-docked.
+        self._apply_opaque_background()
+        self.topLevelChanged.connect(self._on_top_level_changed)
+
     def _setup_ui(self):
         """Build the settings dock widgets and tabs."""
         main_widget = QWidget()
         self.setWidget(main_widget)
 
         layout = QVBoxLayout(main_widget)
+        layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(10)
 
         header_label = QLabel("OpenGeoAgent Settings")
-        header_font = QFont()
-        header_font.setPointSize(12)
+        # Scale relative to the host application font so the header matches
+        # KADAS/QGIS typography instead of forcing a fixed point size.
+        base_font = main_widget.font()
+        header_font = QFont(base_font)
+        if base_font.pointSizeF() > 0:
+            header_font.setPointSizeF(base_font.pointSizeF() * 1.2)
+        elif base_font.pixelSize() > 0:
+            header_font.setPixelSize(int(base_font.pixelSize() * 1.2))
         header_font.setBold(True)
         header_label.setFont(header_font)
         header_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -445,8 +479,13 @@ class SettingsDockWidget(QDockWidget):
         self.tab_widget = QTabWidget()
         layout.addWidget(self.tab_widget)
 
-        self.tab_widget.addTab(self._create_dependencies_tab(), "Dependencies")
-        self.tab_widget.addTab(self._create_model_tab(), "Model")
+        # Wrap each page in a scroll area so long content (the Model tab in
+        # particular) is fully reachable in a narrow docked panel instead of
+        # being clipped at the bottom.
+        self.tab_widget.addTab(
+            self._wrap_in_scroll(self._create_dependencies_tab()), "Dependencies"
+        )
+        self.tab_widget.addTab(self._wrap_in_scroll(self._create_model_tab()), "Model")
 
         button_layout = QHBoxLayout()
         self.save_btn = QPushButton("Save Settings")
@@ -473,8 +512,41 @@ class SettingsDockWidget(QDockWidget):
         layout.addLayout(diagnostics_layout)
 
         self.status_label = QLabel("Settings loaded")
-        self.status_label.setStyleSheet("color: gray; font-size: 10px;")
+        self.status_label.setStyleSheet(_MUTED_STYLE)
         layout.addWidget(self.status_label)
+
+    def _wrap_in_scroll(self, inner):
+        """Wrap a tab page in a scroll area so long content is fully reachable."""
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(_enum_value(QFrame, "Shape", "NoFrame"))
+        scroll.setHorizontalScrollBarPolicy(
+            _enum_value(Qt, "ScrollBarPolicy", "ScrollBarAlwaysOff")
+        )
+        # Keep the scrolled content opaque so the themed background survives a
+        # float -> re-dock cycle (a plain viewport can otherwise render blank).
+        scroll.viewport().setAutoFillBackground(True)
+        inner.setAutoFillBackground(True)
+        scroll.setWidget(inner)
+        return scroll
+
+    def _apply_opaque_background(self):
+        """Fill the dock content with the themed window background.
+
+        A QDockWidget's content widget can lose its background brush when the
+        dock is floated and then re-docked, leaving a see-through panel.
+        Explicitly filling with the Window palette role keeps it opaque and
+        on-theme in both the docked and floating states.
+        """
+        widget = self.widget()
+        if widget is None:
+            return
+        widget.setAutoFillBackground(True)
+        widget.setBackgroundRole(_enum_value(QPalette, "ColorRole", "Window"))
+
+    def _on_top_level_changed(self, _floating):
+        """Re-assert the opaque background across float/dock transitions."""
+        self._apply_opaque_background()
 
     def _create_dependencies_tab(self):
         """Create the dependency status and installer tab."""
@@ -522,17 +594,7 @@ class SettingsDockWidget(QDockWidget):
         layout.addWidget(self.deps_progress_label)
 
         self.install_deps_btn = QPushButton("Install Dependencies")
-        self.install_deps_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #1976D2;
-                color: white;
-                font-weight: bold;
-                padding: 6px 12px;
-                border-radius: 4px;
-            }
-            QPushButton:hover { background-color: #1565C0; }
-            QPushButton:disabled { background-color: #BDBDBD; }
-        """)
+        self.install_deps_btn.setStyleSheet(_ACCENT_BUTTON_STYLE)
         self.install_deps_btn.clicked.connect(self._install_dependencies)
         layout.addWidget(self.install_deps_btn)
 
@@ -579,6 +641,24 @@ class SettingsDockWidget(QDockWidget):
 
         self.fast_check = QCheckBox("Use fast GeoAgent prompt")
         form.addRow("", self.fast_check)
+
+        # Prompt-time guidance injection (KADAS/QGIS agent modes). Independent axes:
+        # docs = the API reference matched to the prompt; upskilling = the operations guide.
+        self.inject_api_docs_check = QCheckBox("Inject API docs for the prompt (documancer)")
+        self.inject_api_docs_check.setToolTip(
+            "Prepend the KADAS/PyQGIS API reference relevant to each prompt, so the model "
+            "uses real method signatures instead of guessing. Retrieved by keyword from "
+            "the shipped doc packs."
+        )
+        form.addRow("", self.inject_api_docs_check)
+
+        self.upskilling_check = QCheckBox("Apply operations guidance (upskilling)")
+        self.upskilling_check.setToolTip(
+            "Prepend the cohesive KADAS operations guide (which tool for which intent, "
+            "argument conventions). Sliced to the model's context: small models get the "
+            "core rules only, large models get the whole guide."
+        )
+        form.addRow("", self.upskilling_check)
 
         self.max_tokens_spin = _OptionalMaxTokensSpinBox()
         self.max_tokens_spin.setRange(MAX_TOKENS_AUTO_VALUE, 32768)
@@ -678,7 +758,7 @@ class SettingsDockWidget(QDockWidget):
             "the lower-cost fallback model."
         )
         image_note.setWordWrap(True)
-        image_note.setStyleSheet("font-size: 10px; color: gray;")
+        image_note.setStyleSheet(_MUTED_STYLE)
         image_form.addRow(image_note)
         layout.addWidget(image_group)
 
@@ -708,7 +788,7 @@ class SettingsDockWidget(QDockWidget):
             "chat dock has focus."
         )
         voice_note.setWordWrap(True)
-        voice_note.setStyleSheet("font-size: 10px; color: gray;")
+        voice_note.setStyleSheet(_MUTED_STYLE)
         voice_form.addRow(voice_note)
 
         layout.addWidget(voice_group)
@@ -720,7 +800,7 @@ class SettingsDockWidget(QDockWidget):
             "Login opens ChatGPT in your browser using the Codex OAuth flow."
         )
         oauth_note.setWordWrap(True)
-        oauth_note.setStyleSheet("font-size: 10px; color: gray;")
+        oauth_note.setStyleSheet(_MUTED_STYLE)
         oauth_form.addRow(oauth_note)
 
         oauth_button_layout = QHBoxLayout()
@@ -739,7 +819,7 @@ class SettingsDockWidget(QDockWidget):
 
         self.openai_oauth_status_label = QLabel("Not logged in")
         self.openai_oauth_status_label.setWordWrap(True)
-        self.openai_oauth_status_label.setStyleSheet("font-size: 10px; color: gray;")
+        self.openai_oauth_status_label.setStyleSheet(_MUTED_STYLE)
         oauth_form.addRow("Status:", self.openai_oauth_status_label)
 
         layout.addWidget(oauth_group)
@@ -750,7 +830,7 @@ class SettingsDockWidget(QDockWidget):
             "are stored in QGIS Auth Manager."
         )
         note.setWordWrap(True)
-        note.setStyleSheet("font-size: 10px; color: gray;")
+        note.setStyleSheet(_MUTED_STYLE)
         layout.addWidget(note)
         layout.addStretch()
         return widget
@@ -823,7 +903,7 @@ class SettingsDockWidget(QDockWidget):
             name_label.setMinimumWidth(120)
             name_label.setMaximumWidth(190)
             status_label = QLabel("Checking...")
-            status_label.setStyleSheet("color: gray;")
+            status_label.setStyleSheet("color: palette(mid);")
             row_layout.addWidget(name_label)
             row_layout.addWidget(status_label)
             row_layout.addStretch()
@@ -920,7 +1000,7 @@ class SettingsDockWidget(QDockWidget):
             return
 
         self.openai_oauth_status_label.setText("Waiting for browser login...")
-        self.openai_oauth_status_label.setStyleSheet("font-size: 10px; color: #1976D2;")
+        self.openai_oauth_status_label.setStyleSheet(_INFO_STYLE)
         self._set_oauth_buttons_enabled(False)
         self._oauth_worker = OAuthLoginWorker(config, self)
         self._oauth_worker.auth_url.connect(self._open_oauth_browser)
@@ -944,7 +1024,7 @@ class SettingsDockWidget(QDockWidget):
             return
 
         self.openai_oauth_status_label.setText("Refreshing token...")
-        self.openai_oauth_status_label.setStyleSheet("font-size: 10px; color: #1976D2;")
+        self.openai_oauth_status_label.setStyleSheet(_INFO_STYLE)
         self._set_oauth_buttons_enabled(False)
         self._oauth_worker = OAuthRefreshWorker(config, refresh_token, self)
         self._oauth_worker.finished.connect(self._on_oauth_worker_finished)
@@ -1001,9 +1081,7 @@ class SettingsDockWidget(QDockWidget):
         )
         if not str(authcfg).strip():
             self.openai_oauth_status_label.setText("Not logged in")
-            self.openai_oauth_status_label.setStyleSheet(
-                "font-size: 10px; color: gray;"
-            )
+            self.openai_oauth_status_label.setStyleSheet(_MUTED_STYLE)
             return
         if expires_at:
             try:
@@ -1020,8 +1098,15 @@ class SettingsDockWidget(QDockWidget):
         self.openai_oauth_status_label.setStyleSheet("font-size: 10px; color: green;")
 
     def _on_provider_changed(self, provider):
-        """Update the model field when the provider changes."""
+        """Update the model field and its hint when the provider changes."""
         self.model_input.setText(DEFAULT_MODELS.get(provider, ""))
+        hint = SELF_CONFIGURING_PROVIDERS.get(provider)
+        # lmstudio/eth-cluster resolve the model themselves, so blank is correct here and
+        # "Provider default" would imply a fixed id that does not exist.
+        self.model_input.setPlaceholderText(
+            "Auto-detect (leave blank)" if hint else "Provider default"
+        )
+        self.model_input.setToolTip(hint or "")
 
     def _load_settings(self):
         """Load persisted settings into the form fields."""
@@ -1037,6 +1122,12 @@ class SettingsDockWidget(QDockWidget):
         self.model_input.setText(model or DEFAULT_MODELS.get(provider, ""))
         self.fast_check.setChecked(
             self.settings.value(f"{SETTINGS_PREFIX}fast_mode", False, type=bool)
+        )
+        self.inject_api_docs_check.setChecked(
+            self.settings.value(f"{SETTINGS_PREFIX}inject_api_docs", False, type=bool)
+        )
+        self.upskilling_check.setChecked(
+            self.settings.value(f"{SETTINGS_PREFIX}upskilling", False, type=bool)
         )
         self.max_tokens_spin.setValue(
             _max_tokens_from_settings(self.settings) or MAX_TOKENS_AUTO_VALUE
@@ -1122,6 +1213,12 @@ class SettingsDockWidget(QDockWidget):
             f"{SETTINGS_PREFIX}fast_mode", self.fast_check.isChecked()
         )
         self.settings.setValue(
+            f"{SETTINGS_PREFIX}inject_api_docs", self.inject_api_docs_check.isChecked()
+        )
+        self.settings.setValue(
+            f"{SETTINGS_PREFIX}upskilling", self.upskilling_check.isChecked()
+        )
+        self.settings.setValue(
             f"{SETTINGS_PREFIX}max_tokens",
             _max_tokens_to_setting(self.max_tokens_spin.value()),
         )
@@ -1164,7 +1261,7 @@ class SettingsDockWidget(QDockWidget):
         model_id = self.model_input.text().strip() or DEFAULT_MODELS.get(provider, "")
         self.test_provider_btn.setEnabled(False)
         self.status_label.setText("Testing provider...")
-        self.status_label.setStyleSheet("color: #1976D2; font-size: 10px;")
+        self.status_label.setStyleSheet(_INFO_STYLE)
         self._provider_test_worker = ProviderTestWorker(
             provider,
             model_id,

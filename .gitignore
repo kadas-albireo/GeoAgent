@@ -109,9 +109,21 @@ node_modules/
 # IDE settings
 .vscode/
 CLAUDE.md
+CLAUDE.local.md
+.claude/settings.local.json
 .firecrawl/
 .codex
 *.zip
 docs/examples/codex_example_map.png
 scripts/
 symbology-style.db
+
+# local_agent run artifacts (generated)
+local_agent/trace.md
+local_agent/*.jsonl
+local_agent/runs/
+
+# Local dev provider keys - never commit
+local_agent/fast-agent.secrets.yaml
+*.secrets.yaml
+.fast-agent/

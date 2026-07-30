@@ -21,6 +21,7 @@ import os
 import platform
 import re
 import shutil
+import site
 import subprocess  # nosec B404
 import sys
 import time
@@ -199,6 +200,18 @@ def ensure_venv_packages_available() -> bool:
     site_packages = get_venv_site_packages()
     if site_packages not in sys.path:
         sys.path.insert(0, site_packages)
+    # Process any .pth files in the venv's site-packages. A bare
+    # sys.path.insert() makes regular (directory) packages importable but does
+    # NOT execute .pth files — those normally run only at interpreter startup
+    # via site.py. Editable installs (pip/uv install -e, as used for the local
+    # GeoAgent checkout) register their package through a .pth that imports and
+    # installs a MetaPathFinder; without running it, importlib.find_spec() never
+    # sees the package and dependency verification fails with "could not be
+    # verified". site.addsitedir() reads and executes those .pth lines.
+    site.addsitedir(site_packages)
+    # find_spec() caches negative lookups; drop them so a just-registered
+    # editable finder is picked up within the same session.
+    importlib.invalidate_caches()
     return True
 
 

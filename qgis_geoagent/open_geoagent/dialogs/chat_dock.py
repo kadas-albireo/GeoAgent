@@ -31,10 +31,12 @@ from qgis.PyQt.QtCore import (
     QSettings,
     QThread,
     QTimer,
+    QUrl,
     pyqtSignal,
 )
 from qgis.PyQt.QtGui import (
     QCursor,
+    QDesktopServices,
     QGuiApplication,
     QIcon,
     QKeySequence,
@@ -81,20 +83,41 @@ DEFAULT_MODELS = {
     "gemini": "gemini-3.1-pro-preview",
     "ollama": "qwen3.5:4b",
     "litellm": "openai/gpt-5.5",
+    # Both of these are deliberately blank: they are zero-configuration choices, and the
+    # provider resolves the model itself.
+    #   lmstudio    -> starts the LM Studio server and uses whichever model LM Studio
+    #                  has loaded, at its maximum context (geoagent.core.lmstudio).
+    #   eth-cluster -> opens the SSH tunnel to the ETH Slurm GPU node and uses the model
+    #                  named in the connection config (geoagent.core.eth_cluster).
+    # A hardcoded id here would be a lie for any user with a different model downloaded.
+    "lmstudio": "",
+    "eth-cluster": "",
     "openrouter": "deepseek/deepseek-chat",
     "vllm": "",
 }
 PROVIDERS = [
     "anthropic",
     "bedrock",
+    "eth-cluster",
     "gemini",
     "litellm",
+    "lmstudio",
     "ollama",
     "openai",
     "openai-codex",
     "openrouter",
     "vllm",
 ]
+# Providers that need no API key and resolve their own model, so the UI can say so
+# instead of leaving the user to wonder which field to fill in.
+SELF_CONFIGURING_PROVIDERS = {
+    "lmstudio": "Local LM Studio model (auto-detects the loaded model).",
+    "eth-cluster": (
+        "Open-source model on the ETH student cluster, over an SSH tunnel. "
+        "Needs a one-time terminal login: "
+        "python -m geoagent.core.eth_cluster login"
+    ),
+}
 MAX_CONTEXT_MESSAGES = 12
 MAX_CONTEXT_CHARS = 12000
 MAX_IMAGE_ATTACHMENTS = 4
@@ -146,6 +169,7 @@ SAMPLE_PROMPTS = [
 ]
 AGENT_MODES = [
     "General QGIS",
+    "KADAS",
     "GEE Data Catalogs",
     "GeoAI",
     "HyperCoast",
@@ -265,7 +289,7 @@ def _permission_allows_tool(permission_profile, tool_name, meta=None):
     profile = PERMISSION_PROFILE_ALIASES.get(profile, profile)
     if profile == "Execute Scripts":
         return True
-    if name == "run_pyqgis_script":
+    if name in {"run_pyqgis_script", "run_command"}:
         return False
     if profile == "Run processing":
         return True
@@ -486,6 +510,14 @@ def _format_chat_worker_error(exc, provider="", agent_mode=""):
     provider_label = provider or "the selected provider"
     mode_label = agent_mode or "this mode"
     is_opera_mode = "opera" in agent_mode.lower()
+
+    # Setup failures from the self-configuring providers already say exactly what to do
+    # ("run: lms get ...", "python -m geoagent.core.eth_cluster login"). Return them
+    # verbatim, and do it *first*: ConnectionError_ lowercases to "connectionerror_",
+    # which would otherwise match the generic TLS/connection branch below and bury the
+    # instruction under advice about checking the user's proxy.
+    if cls_name in ("lmstudioerror", "connectionerror_"):
+        return raw
 
     try:
         from geoagent.core.agent import _looks_like_max_tokens_reached
@@ -1919,11 +1951,22 @@ class ChatWorker(QThread):
         stream=False,
         agent_mode=DEFAULT_AGENT_MODE,
         permission_profile=DEFAULT_PERMISSION_PROFILE,
+        enable_logging=False,
         parent=None,
+        seed_history=None,
+        plan_first=False,
+        plan_query=None,
     ):
         super().__init__(parent)
         self.iface = iface
         self.prompt = prompt
+        # Prior turns as [(role, text), …] to seed the fresh agent's conversation, so
+        # history is proper role-tagged messages rather than a flattened blob.
+        self.seed_history = seed_history or []
+        # Plan-first reasoning: run a toolless planning pass, then execute the plan.
+        self.plan_first = bool(plan_first)
+        self.plan_query = plan_query or prompt
+        self._plan_text = ""
         self.provider = provider
         self.model_id = model_id or None
         self.fast = fast
@@ -1932,6 +1975,7 @@ class ChatWorker(QThread):
         self.stream = bool(stream)
         self.agent_mode = agent_mode or DEFAULT_AGENT_MODE
         self.permission_profile = permission_profile or DEFAULT_PERMISSION_PROFILE
+        self.enable_logging = bool(enable_logging)
         if self.permission_profile == "Trusted auto-approve":
             self.auto_approve_tools = True
 
@@ -1955,6 +1999,7 @@ class ChatWorker(QThread):
             )
             factory_name = {
                 "General QGIS": "for_qgis",
+                "KADAS": "for_kadas",
                 "WhiteboxTools": "for_whitebox",
                 "NASA Earthdata": "for_nasa_earthdata",
                 "NASA OPERA": "for_nasa_opera",
@@ -1983,14 +2028,24 @@ class ChatWorker(QThread):
             }
             if self.permission_profile:
                 kwargs["permission_profile"] = self.permission_profile
+            if self.enable_logging:
+                kwargs["enable_logging"] = True
             try:
                 agent = factory(self.iface, **kwargs)
             except TypeError as exc:
-                if "permission_profile" not in str(exc):
+                message = str(exc)
+                if (
+                    "permission_profile" not in message
+                    and "enable_logging" not in message
+                ):
                     raise
+                # Older core factories may not accept these kwargs; retry without.
                 kwargs.pop("permission_profile", None)
+                kwargs.pop("enable_logging", None)
                 agent = factory(self.iface, **kwargs)
             agent = _filter_tools_for_permission(agent, self.permission_profile)
+            self._seed_agent_history(agent)
+            self._run_planning_pass(agent)
             if self.agent_mode == "STAC":
                 self.prompt = (
                     "You are in STAC mode. Use available STAC search, asset "
@@ -2032,6 +2087,7 @@ class ChatWorker(QThread):
                     "cancelled": ", ".join(response.cancelled_tools or []),
                     "elapsed": f"{response.execution_time:.2f}s",
                     "cancelled_by_user": False,
+                    "plan": self._plan_text,
                 }
             )
         except Exception as exc:
@@ -2056,6 +2112,64 @@ class ChatWorker(QThread):
                     "elapsed": "",
                     "cancelled_by_user": self.isInterruptionRequested(),
                 }
+            )
+
+    def _seed_agent_history(self, agent):
+        """Seed the agent's conversation with prior turns as role-tagged messages.
+
+        This is the "seed-history" optimisation: instead of flattening the transcript into
+        the user message, we hand the fresh Strands agent proper ``user``/``assistant``
+        messages so the model gets native multi-turn context and the server can prefix-match
+        the earlier turns. Only the current turn carries injected docs/guidance.
+
+        Fail-soft: if the Strands message shape is not what we expect, skip seeding and run
+        this turn stateless rather than break it.
+        """
+        if not self.seed_history:
+            return
+        try:
+            strands_agent = agent.strands_agent
+            strands_agent.messages = [
+                {"role": role, "content": [{"text": text}]}
+                for role, text in self.seed_history
+                if text
+            ]
+        except Exception as exc:
+            QgsMessageLog.logMessage(
+                f"History seeding skipped ({exc}); running this turn without prior context.",
+                "OpenGeoAgent",
+                Qgis.MessageLevel.Warning,
+            )
+
+    def _run_planning_pass(self, agent):
+        """Plan-first reasoning: a toolless planning call, then rewrite the turn to execute it.
+
+        Runs on the same model/endpoint as the agent, but with no tools (only tool *names*),
+        so it is a cheap "think first" pass. The resulting plan is prepended to the turn and
+        stored for display. Fail-soft: any error just skips planning and runs normally.
+        """
+        if not self.plan_first:
+            return
+        try:
+            from geoagent.core import operations_guide, planning
+
+            strands_agent = agent.strands_agent
+            tool_names = list(getattr(strands_agent, "tool_names", []) or [])
+            guide_block = operations_guide.build_block(max_tokens=600)
+            plan = planning.make_plan(
+                strands_agent.model,
+                self.plan_query,
+                tool_names=tool_names,
+                guide_block=guide_block,
+            )
+            if plan:
+                self._plan_text = plan
+                self.prompt = planning.build_execution_prompt(plan, self.prompt)
+        except Exception as exc:
+            QgsMessageLog.logMessage(
+                f"Plan-first pass skipped ({exc}); running without a plan.",
+                "OpenGeoAgent",
+                Qgis.MessageLevel.Warning,
             )
 
     def _run_streaming_chat(self, agent):
@@ -2127,6 +2241,7 @@ class ChatWorker(QThread):
                 "elapsed": f"{time.time() - started_at:.2f}s",
                 "cancelled_by_user": self.isInterruptionRequested(),
                 "streamed": True,
+                "plan": self._plan_text,
             }
         )
 
@@ -2480,6 +2595,8 @@ class ChatDockWidget(QDockWidget):
         self._history_key = _project_history_key(iface)
         self._jobs = []
         self._active_job_index = None
+        self._run_logger = None
+        self._last_run_log_path = None
 
         self.setAllowedAreas(
             Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea
@@ -2497,42 +2614,68 @@ class ChatDockWidget(QDockWidget):
         layout = QVBoxLayout(main_widget)
         layout.setSpacing(8)
 
-        self.model_group = QGroupBox("Model")
-        self.model_group.setCheckable(True)
-        self.model_group.setChecked(True)
-        self.model_group.toggled.connect(self._on_model_section_toggled)
+        # The chat no longer picks the model. Provider/model are configured once in
+        # GeoAgent Settings -> Model (the single source of truth), persisted to QSettings,
+        # and only *reflected* here. This dock exposes a plain User/Developer split: User
+        # is a clean chat; Developer reveals the operational controls below.
+        self.model_group = QGroupBox("Agent")
+        self.model_group.setCheckable(False)
         model_group_layout = QVBoxLayout(self.model_group)
         model_group_layout.setContentsMargins(8, 8, 8, 8)
 
+        top_row = QHBoxLayout()
+        self.ui_mode_label = QLabel("Mode:")
+        top_row.addWidget(self.ui_mode_label)
+        self.ui_mode_combo = QComboBox()
+        self.ui_mode_combo.addItems(["User", "Developer"])
+        self.ui_mode_combo.setToolTip(
+            "User: a clean chat. Developer: reveal permissions, full LLM logging and "
+            "per-turn tool/token telemetry. Model and provider are set in "
+            "GeoAgent Settings → Model."
+        )
+        self.ui_mode_combo.currentTextChanged.connect(self._on_ui_mode_changed)
+        top_row.addWidget(self.ui_mode_combo)
+        top_row.addStretch(1)
+        model_group_layout.addLayout(top_row)
+
+        self.active_model_label = QLabel("Model: (loading…)")
+        self.active_model_label.setWordWrap(True)
+        self.active_model_label.setStyleSheet("font-size: 10px; color: gray;")
+        model_group_layout.addWidget(self.active_model_label)
+
+        # Plan-first reasoning: a "think, then act" pass before execution. Toolless planner
+        # call turns the request into an ordered plan, which is then executed. Big help for
+        # small local models. Always visible so it is one click away.
+        self.plan_first_check = QCheckBox("Plan-first reasoning")
+        self.plan_first_check.setToolTip(
+            "Before acting, the model writes a short numbered plan of which tools to use, "
+            "then executes it. Adds one cheap (toolless) call per turn; markedly improves "
+            "small local models. Overkill for Claude/large models."
+        )
+        self.plan_first_check.toggled.connect(self._on_plan_first_toggled)
+        model_group_layout.addWidget(self.plan_first_check)
+
+        # Provider + model kept as hidden state: edited in Settings, read here at agent
+        # construction time. Hidden -> no duplicate picker, but the rest of the dock keeps
+        # working unchanged.
+        self.provider_combo = QComboBox()
+        self.provider_combo.addItems(PROVIDERS)
+        self.provider_combo.currentTextChanged.connect(self._on_provider_changed)
+        self.provider_combo.hide()
+        self.model_input = QLineEdit()
+        self.model_input.setPlaceholderText("Use provider default")
+        self.model_input.hide()
+
+        # Developer-only controls. Visibility is driven by the mode selector above.
         self.model_controls = QWidget()
         model_layout = QFormLayout(self.model_controls)
         model_layout.setContentsMargins(0, 0, 0, 0)
+        # Label-above-field: a side-by-side form makes the dock's minimum width
+        # the sum of both columns, which is what stopped it narrowing.
+        model_layout.setRowWrapPolicy(
+            _enum_value(QFormLayout, "RowWrapPolicy", "WrapAllRows")
+        )
         model_group_layout.addWidget(self.model_controls)
-
-        self.provider_combo = QComboBox()
-        self.provider_combo.addItems(PROVIDERS)
-        self.provider_combo.setMinimumContentsLength(8)
-        self.provider_combo.setSizeAdjustPolicy(
-            _enum_value(
-                QComboBox,
-                "SizeAdjustPolicy",
-                "AdjustToMinimumContentsLengthWithIcon",
-            )
-        )
-        self.provider_combo.setSizePolicy(
-            _enum_value(QSizePolicy, "Policy", "Ignored"),
-            _enum_value(QSizePolicy, "Policy", "Fixed"),
-        )
-        self.provider_combo.currentTextChanged.connect(self._on_provider_changed)
-        model_layout.addRow("Provider:", self.provider_combo)
-
-        self.model_input = QLineEdit()
-        self.model_input.setPlaceholderText("Use provider default")
-        self.model_input.setSizePolicy(
-            _enum_value(QSizePolicy, "Policy", "Ignored"),
-            _enum_value(QSizePolicy, "Policy", "Fixed"),
-        )
-        model_layout.addRow("Model:", self.model_input)
 
         self.agent_mode_combo = QComboBox()
         self.agent_mode_combo.addItems(AGENT_MODES)
@@ -2563,17 +2706,27 @@ class ChatDockWidget(QDockWidget):
         self.stream_check.setToolTip(
             "Show model text as it arrives instead of waiting for the full response."
         )
-        mode_layout = QHBoxLayout()
+        # Stacked, not side-by-side: four checkboxes on one row made the dock's
+        # minimum width the sum of all four labels (~590px).
+        mode_layout = QVBoxLayout()
+        mode_layout.setContentsMargins(0, 0, 0, 0)
         mode_layout.addWidget(self.fast_check)
         mode_layout.addWidget(self.stream_check)
         mode_layout.addWidget(self.auto_approve_tools_check)
-        mode_layout.addStretch(1)
         model_layout.addRow("", mode_layout)
 
         self.tool_availability_label = QLabel("Tool availability will appear here.")
         self.tool_availability_label.setWordWrap(True)
         self.tool_availability_label.setStyleSheet("font-size: 10px; color: gray;")
         model_layout.addRow("Tools:", self.tool_availability_label)
+
+        # Per-turn telemetry (Developer mode): how many tools the last turn called and,
+        # when the provider reports it, token usage. This is the "raw tool-call / token"
+        # readout, surfaced inline instead of only in the log file.
+        self.telemetry_label = QLabel("No turn run yet.")
+        self.telemetry_label.setWordWrap(True)
+        self.telemetry_label.setStyleSheet("font-size: 10px; color: gray;")
+        model_layout.addRow("Last turn:", self.telemetry_label)
 
         layout.addWidget(self.model_group)
 
@@ -2754,6 +2907,14 @@ class ChatDockWidget(QDockWidget):
         self.copy_script_btn.clicked.connect(self._copy_last_script_snippet)
         secondary_button_layout.addWidget(self.copy_script_btn)
 
+        self.logs_btn = QPushButton("Logs")
+        self.logs_btn.setToolTip(
+            "Open the developer run-log folder (enable 'Developer mode' to record "
+            "each turn's prompt, tool calls, code and results)."
+        )
+        self.logs_btn.clicked.connect(self._open_run_logs)
+        secondary_button_layout.addWidget(self.logs_btn)
+
         for button in (
             self.send_btn,
             self.voice_btn,
@@ -2764,6 +2925,7 @@ class ChatDockWidget(QDockWidget):
             self.import_md_btn,
             self.copy_md_btn,
             self.copy_script_btn,
+            self.logs_btn,
         ):
             button.setMinimumWidth(0)
             button.setSizePolicy(
@@ -2794,6 +2956,7 @@ class ChatDockWidget(QDockWidget):
             if not model:
                 model = _default_model_for_provider(self.provider_combo.currentText())
             self.model_input.setText(model)
+            self._apply_model_placeholder(self.provider_combo.currentText())
 
             self.fast_check.setChecked(
                 _setting(self.settings, "fast_mode", False, bool)
@@ -2804,9 +2967,15 @@ class ChatDockWidget(QDockWidget):
             self.auto_approve_tools_check.setChecked(
                 _setting(self.settings, "auto_approve_tools", False, bool)
             )
-            expanded = _setting(self.settings, "model_section_expanded", True, bool)
-            self.model_group.setChecked(expanded)
-            self.model_controls.setVisible(expanded)
+            self.plan_first_check.setChecked(
+                _setting(self.settings, "plan_first", False, bool)
+            )
+            ui_mode = _setting(self.settings, "ui_mode", "User")
+            if ui_mode not in ("User", "Developer"):
+                ui_mode = "User"
+            mode_index = self.ui_mode_combo.findText(ui_mode)
+            self.ui_mode_combo.setCurrentIndex(mode_index if mode_index >= 0 else 0)
+            self.model_controls.setVisible(ui_mode == "Developer")
             jobs_expanded = _setting(self.settings, "jobs_section_expanded", True, bool)
             self.jobs_group.setChecked(jobs_expanded)
             self.jobs_controls.setVisible(jobs_expanded)
@@ -2825,6 +2994,7 @@ class ChatDockWidget(QDockWidget):
                 self.auto_approve_tools_check.setChecked(True)
         finally:
             self._loading_settings = False
+        self._refresh_active_model_label()
         self._refresh_tool_availability()
         self._load_project_history()
 
@@ -2857,8 +3027,24 @@ class ChatDockWidget(QDockWidget):
         )
 
     def _on_provider_changed(self, provider):
-        """Update the model field when the provider changes."""
+        """Update the model field and its hint when the provider changes."""
         self.model_input.setText(_default_model_for_provider(provider))
+        self._apply_model_placeholder(provider)
+
+    def _apply_model_placeholder(self, provider):
+        """Explain, in the empty Model field, what a blank value will do.
+
+        For the self-configuring providers a blank model is the intended state, so the
+        generic "Use provider default" placeholder would be actively misleading: there is
+        no fixed default, the provider looks at the machine (or the cluster) and decides.
+        """
+        hint = SELF_CONFIGURING_PROVIDERS.get(provider)
+        if hint:
+            self.model_input.setPlaceholderText("Auto-detect (leave blank)")
+            self.model_input.setToolTip(hint)
+        else:
+            self.model_input.setPlaceholderText("Use provider default")
+            self.model_input.setToolTip("")
 
     def _on_model_section_toggled(self, expanded):
         """Show or hide model controls to keep the dock compact."""
@@ -2867,6 +3053,57 @@ class ChatDockWidget(QDockWidget):
         self.settings.setValue(
             f"{SETTINGS_PREFIX}model_section_expanded", bool(expanded)
         )
+
+    def _on_plan_first_toggled(self, checked):
+        """Persist the plan-first reasoning toggle."""
+        if not self._loading_settings:
+            self.settings.setValue(f"{SETTINGS_PREFIX}plan_first", bool(checked))
+
+    def _developer_logging_enabled(self):
+        """Full LLM trace logging: implied by Developer mode, not a separate toggle."""
+        return self.ui_mode_combo.currentText() == "Developer"
+
+    def _on_ui_mode_changed(self, mode):
+        """Toggle User/Developer: show or hide the operational controls, and persist it."""
+        developer = mode == "Developer"
+        if hasattr(self, "model_controls"):
+            self.model_controls.setVisible(developer)
+        if not self._loading_settings:
+            self.settings.setValue(f"{SETTINGS_PREFIX}ui_mode", mode)
+
+    def _refresh_active_model_label(self):
+        """Reflect the model chosen in Settings (this dock does not choose it)."""
+        if not hasattr(self, "active_model_label"):
+            return
+        provider = self.provider_combo.currentText()
+        model = self.model_input.text().strip() or "provider default"
+        self.active_model_label.setText(
+            f"Model: {provider} / {model}  —  change in GeoAgent Settings → Model"
+        )
+
+    def _sync_model_from_settings(self):
+        """Re-read provider/model/permission from QSettings so edits made in the Settings
+        dock are reflected here without a restart. Cheap; safe to call on show."""
+        prev = self._loading_settings
+        self._loading_settings = True
+        try:
+            provider = _setting(self.settings, "provider", DEFAULT_PROVIDER)
+            index = self.provider_combo.findText(provider)
+            if index >= 0:
+                self.provider_combo.setCurrentIndex(index)
+            model = _setting(self.settings, "model", "")
+            if model:
+                self.model_input.setText(model)
+            profile = _setting(
+                self.settings, "permission_profile", DEFAULT_PERMISSION_PROFILE
+            )
+            profile = PERMISSION_PROFILE_ALIASES.get(profile, profile)
+            pindex = self.permission_combo.findText(profile)
+            if pindex >= 0:
+                self.permission_combo.setCurrentIndex(pindex)
+        finally:
+            self._loading_settings = prev
+        self._refresh_active_model_label()
 
     def _on_jobs_section_toggled(self, expanded):
         """Show or hide job controls to keep the dock compact."""
@@ -3481,6 +3718,7 @@ class ChatDockWidget(QDockWidget):
             self.model_input.setText(model_id)
         fast = self.fast_check.isChecked()
         stream = self.stream_check.isChecked()
+        plan_first = self.plan_first_check.isChecked()
         auto_approve_tools = self.auto_approve_tools_check.isChecked()
         agent_mode = self.agent_mode_combo.currentText()
         permission_profile = self.permission_combo.currentText()
@@ -3491,16 +3729,21 @@ class ChatDockWidget(QDockWidget):
         if not prompt:
             prompt = "Describe the attached image."
         self._record_prompt(prompt)
-        prompt_with_context = self._build_prompt_with_context(prompt)
+        # Seed-history model: the fresh agent gets prior turns as proper role-tagged
+        # messages (not a flattened "Recent conversation:" blob), and only THIS turn's
+        # relevant guidance is injected into the current message. Because history is seeded
+        # from the bare transcript, the injected docs/guide never accumulate across turns.
+        seed_history = self._recent_history_messages()
+        turn_prompt = self._apply_agent_guidance(prompt, prompt, agent_mode, fast)
         if image_model:
-            prompt_with_context = (
-                f"{prompt_with_context}\n\n"
+            turn_prompt = (
+                f"{turn_prompt}\n\n"
                 "Image generation setting: when calling generate_image, use "
                 f"model={image_model} unless the user explicitly asks for a "
                 "different image model."
             )
         attachments = [dict(item) for item in self._image_attachments]
-        chat_payload = _build_chat_content(prompt_with_context, attachments)
+        chat_payload = _build_chat_content(turn_prompt, attachments)
 
         display_body = None
         if attachments:
@@ -3548,14 +3791,105 @@ class ChatDockWidget(QDockWidget):
             stream,
             agent_mode,
             permission_profile,
+            self._developer_logging_enabled(),
             self,
+            seed_history=seed_history,
+            plan_first=plan_first,
+            plan_query=prompt,
         )
         self._worker.chunk_received.connect(self._on_worker_chunk)
         self._worker.finished.connect(self._on_worker_finished)
         self._worker.start()
 
+    def _apply_agent_guidance(self, raw_prompt, composed_prompt, agent_mode, fast):
+        """Prepend prompt-time guidance (documancer API docs + operations guide).
+
+        Two independent, settings-gated injections, both put in the **user message** (never
+        the system prompt, which would invalidate the model's cached prefix every turn):
+
+        - ``inject_api_docs`` -> the KADAS/PyQGIS API reference matched to *raw_prompt* by
+          keyword (``geoagent.core.context_docs``). This is the "documancer": feed only the
+          slice of the API the prompt is about, so context does not blow up.
+        - ``upskilling`` -> the cohesive operations guide, sliced to the model's context
+          (``geoagent.core.operations_guide``); ``fast`` mode gets the core rules only.
+
+        KADAS/QGIS agent modes only (the corpus is GIS-specific). Never raises: a failure
+        to build guidance degrades to the plain prompt rather than breaking the turn.
+        """
+        if agent_mode not in ("KADAS", "General QGIS"):
+            return composed_prompt
+        want_docs = _setting(self.settings, "inject_api_docs", False, bool)
+        want_upskill = _setting(self.settings, "upskilling", False, bool)
+        if not (want_docs or want_upskill):
+            return composed_prompt
+
+        blocks = []
+        injected = []
+        try:
+            if want_upskill:
+                from geoagent.core import operations_guide
+
+                block = operations_guide.build_block(max_tokens=500 if fast else None)
+                if block:
+                    blocks.append(block)
+                    injected.append(
+                        "operations["
+                        + ",".join(
+                            operations_guide.selected_tiers(500 if fast else None)
+                        )
+                        + "]"
+                    )
+            if want_docs:
+                from geoagent.core import context_docs
+
+                block = context_docs.build_context_block(raw_prompt)
+                if block:
+                    blocks.append(block)
+                    packs = context_docs.select_packs(raw_prompt)
+                    injected.append("apidocs[" + ",".join(p.name for p in packs) + "]")
+        except Exception as exc:  # never let guidance injection break a chat turn
+            QgsMessageLog.logMessage(
+                f"Guidance injection skipped: {exc}",
+                "OpenGeoAgent",
+                Qgis.MessageLevel.Warning,
+            )
+            return composed_prompt
+
+        if not blocks:
+            return composed_prompt
+        if hasattr(self, "telemetry_label"):
+            self.telemetry_label.setText("Injected: " + " · ".join(injected))
+        return "\n\n".join(blocks) + "\n\n" + composed_prompt
+
+    def _recent_history_messages(self):
+        """Prior turns as role-tagged messages, to seed a fresh agent's conversation.
+
+        Returns ``[(role, text), …]`` with role in {"user", "assistant"}, capped like the
+        old flattened path (``MAX_CONTEXT_MESSAGES`` / ``MAX_CONTEXT_CHARS``). This is the
+        **bare** transcript — no injected docs/guide — so guidance never accumulates across
+        turns. A trailing user-role entry (an incomplete or cancelled turn) is dropped so
+        the new query does not produce two user messages in a row.
+        """
+        history = []
+        total = 0
+        for msg in self._messages[-MAX_CONTEXT_MESSAGES:]:
+            body = (msg.get("body") or "").strip()
+            if not body:
+                continue
+            role = "user" if msg.get("sender") == "You" else "assistant"
+            history.append((role, body))
+            total += len(body)
+        while total > MAX_CONTEXT_CHARS and len(history) > 1:
+            _role, body = history.pop(0)
+            total -= len(body)
+        while history and history[-1][0] == "user":
+            history.pop()
+        return history
+
     def _build_prompt_with_context(self, prompt):
-        """Include recent chat transcript so follow-up turns have context."""
+        """Deprecated: history is now seeded as role-tagged messages (see
+        ``_recent_history_messages``), not flattened into the prompt. Kept for
+        compatibility in case other call sites reference it."""
         if not self._messages:
             return prompt
 
@@ -3959,6 +4293,25 @@ class ChatDockWidget(QDockWidget):
                 Qgis.MessageLevel.Warning,
             )
 
+    def _update_telemetry_label(self, result, tool_calls):
+        """Set the Developer-mode per-turn readout: tool count + names, tokens, elapsed."""
+        if not hasattr(self, "telemetry_label"):
+            return
+        names = [str(c.get("name", "?")) for c in tool_calls if isinstance(c, dict)]
+        parts = [f"{len(names)} tool call(s)"]
+        if names:
+            shown = ", ".join(names[:6]) + (" …" if len(names) > 6 else "")
+            parts.append(shown)
+        tokens = result.get("tokens") or {}
+        if isinstance(tokens, dict) and tokens:
+            inp = tokens.get("input_accumulated") or tokens.get("inputTokens")
+            out = tokens.get("output_accumulated") or tokens.get("outputTokens")
+            if inp or out:
+                parts.append(f"tokens in/out: {inp or '?'}/{out or '?'}")
+        if result.get("elapsed"):
+            parts.append(f"elapsed: {result['elapsed']}")
+        self.telemetry_label.setText(" · ".join(parts))
+
     def _on_worker_finished(self, result):
         """Render the completed chat worker result."""
         self._stop_running_status()
@@ -3974,8 +4327,12 @@ class ChatDockWidget(QDockWidget):
             answer = result.get("answer") or (
                 "(Image output.)" if output_images else "(No text response.)"
             )
+            plan = (result.get("plan") or "").strip()
+            if plan:
+                answer = f"**Plan**\n\n{plan}\n\n---\n\n{answer}"
             details = []
             tool_calls = result.get("tool_calls") or []
+            self._update_telemetry_label(result, tool_calls)
             snippet = _latest_executable_snippet(tool_calls)
             if snippet:
                 self._last_script_snippet = snippet
@@ -4316,6 +4673,43 @@ class ChatDockWidget(QDockWidget):
         job["tool_calls"] = result.get("tool_calls", [])
         job["error"] = result.get("error", "")
         self._render_jobs()
+        if self._developer_logging_enabled():
+            self._log_run(job, result)
+
+    def _log_run(self, job, result):
+        """Append the finished turn to the developer run log (best-effort)."""
+        try:
+            from ..run_logger import RunLogger, build_turn_record
+
+            if self._run_logger is None:
+                self._run_logger = RunLogger()
+            path = self._run_logger.log_turn(build_turn_record(job, result))
+            if path is not None:
+                self._last_run_log_path = str(path)
+        except Exception:
+            # Logging must never break a chat turn.
+            pass
+
+    def _open_run_logs(self):
+        """Open the developer run-log folder in the system file manager."""
+        try:
+            from ..run_logger import RunLogger
+
+            if self._run_logger is None:
+                self._run_logger = RunLogger()
+            folder = self._run_logger.log_dir
+            folder.mkdir(parents=True, exist_ok=True)
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
+            if self._developer_logging_enabled():
+                self.status_label.setText(f"Run logs: {folder}")
+            else:
+                self.status_label.setText(
+                    f"Run logs: {folder} (enable Developer mode to record)"
+                )
+            self.status_label.setStyleSheet("color: gray; font-size: 10px;")
+        except Exception as exc:
+            self.status_label.setText(f"Could not open run logs: {exc}")
+            self.status_label.setStyleSheet("color: red; font-size: 10px;")
 
     def _render_jobs(self):
         """Refresh the compact jobs table."""
@@ -4424,8 +4818,9 @@ class ChatDockWidget(QDockWidget):
         super().keyPressEvent(event)
 
     def showEvent(self, event):
-        """Refresh shortcut tooltip when the dock is shown."""
+        """Refresh shortcut tooltip + reflect model settings when the dock is shown."""
         self._configure_voice_shortcut()
+        self._sync_model_from_settings()
         super().showEvent(event)
 
     def closeEvent(self, event):
