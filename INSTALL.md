@@ -41,7 +41,7 @@ Start KADAS Albireo as you normally would.
 3. Restart KADAS.
 4. If the GeoAgent button still does not appear, open Plugins, then the plugin
    list, and make sure "KADAS GeoAgent" is enabled.
-5. Set the token limit from auto to 30000, or the maximum tokens you would like the agent to use per prompt. Note that this must be set if you are using Claude, otherwise there will be an out of tokens error.
+5. **Set the max token limit from auto to 30000**, or the maximum tokens you would like the agent to use per prompt. Note that this must be set if you are using Claude, otherwise there will be an out of tokens error.
 
 Note: if you use a KADAS profile other than `default`, replace `default` in the
 paths above with your profile name.
