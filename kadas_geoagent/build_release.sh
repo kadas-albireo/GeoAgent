@@ -95,10 +95,14 @@ find "$PKG" -type d -name __pycache__ -prune -exec rm -rf {} + 2>/dev/null || tr
 find "$PKG" -type f \( -name '*.pyc' -o -name '*.pyo' -o -name '.DS_Store' \) -delete 2>/dev/null || true
 
 # 5. Docs for the client -------------------------------------------------------
-for doc in INSTALL.md LOCAL_MODEL.md; do
-  [ -f "$REPO_ROOT/kadas_geoagent/$doc" ] && cp "$REPO_ROOT/kadas_geoagent/$doc" "$PKG/"
-done
-ok "client docs included"
+# INSTALL.md is REQUIRED: the README's download instructions tell the client to
+# follow it, so a zip without it is broken. Fail the build rather than ship one.
+[ -f "$REPO_ROOT/kadas_geoagent/INSTALL.md" ] || die "kadas_geoagent/INSTALL.md is missing (it must ship in the zip)"
+cp "$REPO_ROOT/kadas_geoagent/INSTALL.md" "$PKG/"
+ok "INSTALL.md included (required)"
+# LOCAL_MODEL.md is optional but bundled when present (INSTALL.md links to it).
+[ -f "$REPO_ROOT/kadas_geoagent/LOCAL_MODEL.md" ] && cp "$REPO_ROOT/kadas_geoagent/LOCAL_MODEL.md" "$PKG/" \
+  && ok "LOCAL_MODEL.md included"
 
 # 6. Build provenance ----------------------------------------------------------
 # Support's first question is always "which build are you running?". Stamping the
@@ -131,6 +135,7 @@ echo "Verifying archive:"
 for required in \
   kadas_geoagent/__init__.py \
   kadas_geoagent/metadata.txt \
+  kadas_geoagent/INSTALL.md \
   kadas_geoagent/open_geoagent/__init__.py \
   kadas_geoagent/open_geoagent/deps_manager.py
 do
