@@ -61,25 +61,6 @@ def test_lmstudio_is_a_known_provider_name() -> None:
     assert "lmstudio" in typing.get_args(ProviderName)
 
 
-# sanitize / paths
-
-
-@pytest.mark.parametrize(
-    ("raw", "expected"),
-    [
-        ("qwen2.5-7b-instruct", "qwen2.5-7b-instruct"),
-        ("openai/qwen2.5-7b-instruct", "openai-qwen2.5-7b-instruct"),
-        ("claude sonnet 4.6", "claude-sonnet-4.6"),
-        ("///", "unknown-model"),
-    ],
-)
-def test_sanitize_model_name(raw: str, expected: str) -> None:
-    """Model ids become filesystem-safe without collapsing to nothing."""
-    from local_agent.telemetry.tracker import sanitize_model_name
-
-    assert sanitize_model_name(raw) == expected
-
-
 # load_model flags
 
 

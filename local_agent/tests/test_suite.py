@@ -161,5 +161,24 @@ def test_plan_flag_on_agentspec():
     assert reg["claude"].plan is False  # default off
 
 
+# -- telemetry: model-name sanitization --------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("qwen2.5-7b-instruct", "qwen2.5-7b-instruct"),
+        ("openai/qwen2.5-7b-instruct", "openai-qwen2.5-7b-instruct"),
+        ("claude sonnet 4.6", "claude-sonnet-4.6"),
+        ("///", "unknown-model"),
+    ],
+)
+def test_sanitize_model_name(raw: str, expected: str) -> None:
+    """Model ids become filesystem-safe without collapsing to nothing."""
+    from local_agent.telemetry.tracker import sanitize_model_name
+
+    assert sanitize_model_name(raw) == expected
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))
