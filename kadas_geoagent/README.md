@@ -1,5 +1,7 @@
 # OpenGeoAgent Kadas Plugin
 
+Latest: `kadas_geoagent-0.2.1.zip`
+
 ## TODO
 - [ ]  clean up loading layer function
 - [ ]  make open_geoagent a declared, installable dependency to kill the sys.path discovery
