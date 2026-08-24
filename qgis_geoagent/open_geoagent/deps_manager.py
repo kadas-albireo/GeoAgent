@@ -184,35 +184,76 @@ def venv_python_usable(venv_dir: Optional[str] = None) -> Tuple[bool, str]:
     return _python_executable_usable(python_path)
 
 
-def ensure_venv_packages_available() -> bool:
-    """Add the venv's site-packages to sys.path if the venv exists.
+def get_target_dir() -> str:
+    """Plain package directory used when the OS blocks executing a venv Python.
 
-    This is safe to call multiple times (idempotent). If the venv does not
-    exist yet, this is a no-op.
+    Locked-down Windows images (AppLocker / Software Restriction Policy) deny
+    execution of any ``.exe`` under the user profile, so a venv's copied
+    ``python.exe`` cannot be launched (``WinError 1260``). In that case we
+    ``pip install --target`` into this directory using the *base* interpreter
+    (which lives in an allowed location, e.g. the KADAS install root) and add
+    it to ``sys.path`` at runtime. No new executable is ever launched, so the
+    policy never triggers.
+    """
+    return os.path.join(CACHE_DIR, f"site-packages-{PYTHON_VERSION}")
+
+
+def target_install_exists() -> bool:
+    """Return True when the plain ``--target`` package directory has content."""
+    target = get_target_dir()
+    return os.path.isdir(target) and bool(os.listdir(target))
+
+
+def _add_site_dir(path: str) -> bool:
+    """Prepend *path* to ``sys.path`` and run its ``.pth`` files.
+
+    A bare ``sys.path.insert()`` makes regular (directory) packages importable
+    but does NOT execute ``.pth`` files — those normally run only at
+    interpreter startup via ``site.py``. Editable installs (``pip/uv install
+    -e``, used for the local GeoAgent checkout) register their package through
+    a ``.pth`` that installs a MetaPathFinder; without running it,
+    ``importlib.find_spec()`` never sees the package and dependency
+    verification fails with "could not be verified". ``site.addsitedir()``
+    reads and executes those ``.pth`` lines.
+    """
+    if not os.path.isdir(path):
+        return False
+    if path not in sys.path:
+        sys.path.insert(0, path)
+    site.addsitedir(path)
+    return True
+
+
+def ensure_venv_packages_available() -> bool:
+    """Add the installed package locations to ``sys.path``.
+
+    Adds both the venv's site-packages (normal machines) and the plain
+    ``--target`` directory (locked-down Windows fallback), whichever exist.
+    They are independent: on a policy-locked box there is no usable venv but
+    there is a target dir, so this must not early-return on a missing venv.
+
+    Safe to call multiple times (idempotent).
 
     Returns:
-        True if site-packages was added or already present, False if venv
-        does not exist.
+        True if any package location was added, False if none exist yet.
     """
-    if not venv_exists():
-        return False
+    added = False
+    if venv_exists():
+        added = _add_site_dir(get_venv_site_packages()) or added
+    added = _add_site_dir(get_target_dir()) or added
+    if added:
+        # find_spec() caches negative lookups; drop them so a just-registered
+        # editable finder is picked up within the same session.
+        importlib.invalidate_caches()
+    return added
 
-    site_packages = get_venv_site_packages()
-    if site_packages not in sys.path:
-        sys.path.insert(0, site_packages)
-    # Process any .pth files in the venv's site-packages. A bare
-    # sys.path.insert() makes regular (directory) packages importable but does
-    # NOT execute .pth files — those normally run only at interpreter startup
-    # via site.py. Editable installs (pip/uv install -e, as used for the local
-    # GeoAgent checkout) register their package through a .pth that imports and
-    # installs a MetaPathFinder; without running it, importlib.find_spec() never
-    # sees the package and dependency verification fails with "could not be
-    # verified". site.addsitedir() reads and executes those .pth lines.
-    site.addsitedir(site_packages)
-    # find_spec() caches negative lookups; drop them so a just-registered
-    # editable finder is picked up within the same session.
-    importlib.invalidate_caches()
-    return True
+
+def ensure_target_packages_available() -> bool:
+    """Add only the plain ``--target`` package directory to ``sys.path``."""
+    if _add_site_dir(get_target_dir()):
+        importlib.invalidate_caches()
+        return True
+    return False
 
 
 def _dependency_discoverable(import_name: str) -> Tuple[bool, Optional[str]]:
@@ -383,6 +424,9 @@ def _get_subprocess_kwargs() -> dict:
 
 def _uv_usable() -> bool:
     """Return True when the cached uv binary exists and verifies successfully."""
+    if os.environ.get("GEOAGENT_SIMULATE_EXE_BLOCKED"):
+        # uv.exe lives under the cache dir and would be policy-blocked too.
+        return False
     try:
         from .uv_manager import uv_exists, verify_uv
 
@@ -452,6 +496,18 @@ def _python_executable_usable(path: str) -> Tuple[bool, str]:
     looks correct, but a subprocess fails before startup with ``No module named
     encodings``. Validate candidates before using them for ``venv`` or ``uv``.
     """
+    # Test seam: simulate a locked-down Windows image (AppLocker / SRP) that
+    # denies execution of any executable under the user profile, so the venv's
+    # copied python cannot start while the base interpreter (outside the cache
+    # dir) still can. Lets the target-dir fallback be exercised on any OS.
+    if os.environ.get("GEOAGENT_SIMULATE_EXE_BLOCKED") and os.path.abspath(
+        path
+    ).startswith(os.path.abspath(CACHE_DIR) + os.sep):
+        return (
+            False,
+            "OSError: [WinError 1260] This program is blocked by group "
+            "policy (simulated GEOAGENT_SIMULATE_EXE_BLOCKED)",
+        )
     code = (
         "import encodings, sys; "
         f"raise SystemExit(0 if sys.version_info[:2] == "
@@ -1129,6 +1185,88 @@ def install_packages(
     return False, f"pip install failed:\n{error_output}"
 
 
+def install_packages_to_target(
+    target_dir: str,
+    packages: List[str],
+    progress_callback: Optional[Callable[[int, str], None]] = None,
+) -> Tuple[bool, str]:
+    """Install packages into a plain directory via ``pip --target``.
+
+    Used when a virtual environment cannot be created because the OS blocks
+    executing a user-profile ``python.exe`` (locked-down Windows, ``WinError
+    1260``). Runs the *base* interpreter found by ``_find_python_executable()``
+    — it sits in an allowed location — so no policy-blocked executable is ever
+    launched. The resulting directory is added to ``sys.path`` by
+    ``ensure_target_packages_available()``.
+
+    Args:
+        target_dir: Directory to install into (``get_target_dir()``).
+        packages: pip package names / wheel paths to install.
+        progress_callback: Optional ``(percent, message)`` callback.
+
+    Returns:
+        Tuple of (success, message).
+    """
+    try:
+        base_python = _find_python_executable()
+    except RuntimeError as exc:
+        return False, f"No usable base Python interpreter was found:\n{exc}"
+
+    env = _get_clean_env()
+    kwargs = _get_subprocess_kwargs()
+
+    # The base interpreter must expose pip. QGIS/KADAS builds normally bundle
+    # it; if not, there is no way to install without a venv, so fail clearly.
+    check = subprocess.run(  # nosec B603
+        [base_python, "-m", "pip", "--version"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env=env,
+        **kwargs,
+    )
+    if check.returncode != 0:
+        return (
+            False,
+            "The base Python interpreter has no pip, so packages cannot be "
+            "installed without a virtual environment (which this machine "
+            "blocks). Ask an administrator to allow executing "
+            f"{get_venv_dir()}, or to install pip for {base_python}.\n"
+            f"Details:\n{_truncated_subprocess_output(check)}",
+        )
+
+    os.makedirs(target_dir, exist_ok=True)
+    cmd = [
+        base_python,
+        "-m",
+        "pip",
+        "install",
+        "--target",
+        target_dir,
+        "--upgrade",
+        "--disable-pip-version-check",
+        "--prefer-binary",
+    ] + packages
+
+    if progress_callback:
+        progress_callback(20, f"Installing (pip --target): {', '.join(packages)}...")
+
+    result = subprocess.run(  # nosec B603
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=600,
+        env=env,
+        **kwargs,
+    )
+    if result.returncode == 0:
+        return True, "Packages installed successfully."
+    return (
+        False,
+        f"pip --target install failed:\n{_truncated_subprocess_output(result)}",
+    )
+
+
 class DepsInstallWorker(QThread):
     """Worker thread for creating a venv and installing dependencies."""
 
@@ -1165,44 +1303,21 @@ class DepsInstallWorker(QThread):
                 else:
                     self.progress.emit(5, "uv ready.")
 
-            # Step 1: Create venv if needed, or recreate stale broken venvs
+            # Step 1: Create venv if needed, or recreate stale broken venvs.
+            # On locked-down Windows (AppLocker / SRP) this fails because the
+            # venv's python.exe cannot be launched (WinError 1260); we then
+            # fall back to a plain ``pip --target`` install driven by the base
+            # interpreter, which never launches a user-profile executable.
+            venv_error: Optional[str] = None
             try:
                 _ensure_usable_venv(
                     venv_dir,
                     progress_callback=lambda p, m: self.progress.emit(p, m),
                 )
             except RuntimeError as e:
-                self.finished.emit(False, str(e))
-                return
-            self.progress.emit(10, "Virtual environment ready.")
+                venv_error = str(e)
 
-            # Step 2: Verify pip (only needed when not using uv)
-            use_uv = _uv_usable()
-            if not use_uv:
-                self.progress.emit(12, "Verifying pip...")
-                python_path = get_venv_python_path(venv_dir)
-                env = _get_clean_env()
-                kwargs = _get_subprocess_kwargs()
-
-                result = subprocess.run(  # nosec B603
-                    [python_path, "-m", "pip", "--version"],
-                    capture_output=True,
-                    text=True,
-                    timeout=30,
-                    env=env,
-                    **kwargs,
-                )
-                if result.returncode != 0:
-                    self.finished.emit(
-                        False,
-                        "pip is not available in the virtual environment.\n"
-                        "Please install dependencies manually:\n"
-                        'pip install "GeoAgent[providers]>=1.8.0"',
-                    )
-                    return
-            self.progress.emit(15, "Package installer ready.")
-
-            # Step 3: Install missing packages
+            # Step 2/3: Install missing packages via the venv, or the fallback.
             missing = get_missing_packages(self.group_name)
             if not missing:
                 self.finished.emit(
@@ -1211,18 +1326,68 @@ class DepsInstallWorker(QThread):
                 )
                 return
 
-            self.progress.emit(20, f"Installing: {', '.join(missing)}...")
-            success, message = install_packages(
-                venv_dir,
-                missing,
-                progress_callback=lambda p, m: self.progress.emit(
-                    20 + int(p * 0.65), m
-                ),
-            )
-            if not success:
-                self.finished.emit(False, message)
-                return
-            self.progress.emit(85, "Packages installed.")
+            if venv_error is not None:
+                self.progress.emit(
+                    15,
+                    "Virtual environment unavailable on this machine; "
+                    "installing without a venv...",
+                )
+                success, message = install_packages_to_target(
+                    get_target_dir(),
+                    missing,
+                    progress_callback=lambda p, m: self.progress.emit(
+                        20 + int(p * 0.65), m
+                    ),
+                )
+                if not success:
+                    self.finished.emit(
+                        False,
+                        f"{message}\n\nVirtual environment could not be created:"
+                        f"\n{venv_error}",
+                    )
+                    return
+                self.progress.emit(85, "Packages installed.")
+            else:
+                self.progress.emit(10, "Virtual environment ready.")
+
+                # Verify pip (only needed when not using uv)
+                use_uv = _uv_usable()
+                if not use_uv:
+                    self.progress.emit(12, "Verifying pip...")
+                    python_path = get_venv_python_path(venv_dir)
+                    env = _get_clean_env()
+                    kwargs = _get_subprocess_kwargs()
+
+                    result = subprocess.run(  # nosec B603
+                        [python_path, "-m", "pip", "--version"],
+                        capture_output=True,
+                        text=True,
+                        timeout=30,
+                        env=env,
+                        **kwargs,
+                    )
+                    if result.returncode != 0:
+                        self.finished.emit(
+                            False,
+                            "pip is not available in the virtual environment.\n"
+                            "Please install dependencies manually:\n"
+                            'pip install "GeoAgent[providers]>=1.8.0"',
+                        )
+                        return
+                self.progress.emit(15, "Package installer ready.")
+
+                self.progress.emit(20, f"Installing: {', '.join(missing)}...")
+                success, message = install_packages(
+                    venv_dir,
+                    missing,
+                    progress_callback=lambda p, m: self.progress.emit(
+                        20 + int(p * 0.65), m
+                    ),
+                )
+                if not success:
+                    self.finished.emit(False, message)
+                    return
+                self.progress.emit(85, "Packages installed.")
 
             # Step 4: Add venv to sys.path
             self.progress.emit(90, "Configuring package paths...")
