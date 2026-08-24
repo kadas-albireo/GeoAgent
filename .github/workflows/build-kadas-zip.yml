@@ -1,0 +1,52 @@
+name: Build client zip
+
+# Rebuilds kadas_geoagent.zip (the file the README download link serves via
+# raw/main/kadas_geoagent.zip) whenever the plugin source changes on main, and
+# commits the refreshed zip back to main.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "kadas_geoagent/**"
+      - "qgis_geoagent/open_geoagent/**"
+      - "geoagent/**"
+      - "pyproject.toml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-kadas-zip
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Build the client zip
+        run: |
+          chmod +x kadas_geoagent/build_release.sh
+          bash kadas_geoagent/build_release.sh
+          cp dist/kadas_geoagent-*.zip kadas_geoagent.zip
+
+      - name: Commit refreshed zip back to main (only if it changed)
+        run: |
+          if git diff --quiet -- kadas_geoagent.zip; then
+            echo "kadas_geoagent.zip unchanged; nothing to commit."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add kadas_geoagent.zip
+          git commit -m "rebuild kadas_geoagent.zip [skip ci]"
+          git push
