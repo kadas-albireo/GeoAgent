@@ -20,7 +20,7 @@ about=KADAS GeoAgent brings the GeoAgent QGIS tool surface into a dockable
     - The shared OpenGeoAgent dock package (open_geoagent) importable on the
       KADAS Python path
     - KADAS Albireo with Python 3.10 or newer
-version=0.2.0
+version=0.2.1
 author=OpenGIS
 email=aloha@opengis.ch
 
@@ -36,6 +36,10 @@ experimental=True
 deprecated=False
 
 changelog=
+    0.2.1 - Install dependencies on locked-down Windows
+        - Fall back to a plain "pip --target" install driven by the base
+          interpreter when Group Policy (AppLocker/SRP) blocks executing the
+          virtual environment's python.exe (WinError 1260)
     0.2.0 - Support both KADAS 2 and KADAS 3
         - Annotation tools detect the running KADAS and use the matching API
           (KadasItemLayer on 2.x, QgsAnnotationLayer on 3.x)
