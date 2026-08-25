@@ -1,11 +1,16 @@
 """
 Dependency Manager for OpenGeoAgent
 
-Manages a virtual environment for plugin dependencies
-to avoid polluting the QGIS built-in Python environment.
+Installs plugin dependencies without polluting the host's built-in Python.
+There are two install paths, chosen by prefer_prefix_install() (env
+GEOAGENT_NO_VENV):
 
-The venv is created at ~/.open_geoagent/venv_pyX.Y and its
-site-packages directory is added to sys.path at runtime.
+- QGIS desktop (default): a virtualenv at ~/.open_geoagent/venv_pyX.Y.
+- KADAS (GEOAGENT_NO_VENV=1): a pip --prefix install into
+  ~/.open_geoagent/prefix-pyX.Y run by the KADAS base interpreter. No venv,
+  because locked-down Windows blocks executing a user-profile python.exe.
+
+Either location's site-packages is added to sys.path at runtime.
 
 All ``subprocess`` calls in this module use list-form argv built from
 internal constants (the resolved Python interpreter, the resolved ``uv``
@@ -24,6 +29,7 @@ import shutil
 import site
 import subprocess  # nosec B404
 import sys
+import sysconfig
 import time
 from typing import Callable, Dict, List, Optional, Tuple
 
@@ -184,26 +190,6 @@ def venv_python_usable(venv_dir: Optional[str] = None) -> Tuple[bool, str]:
     return _python_executable_usable(python_path)
 
 
-def get_target_dir() -> str:
-    """Plain package directory used when the OS blocks executing a venv Python.
-
-    Locked-down Windows images (AppLocker / Software Restriction Policy) deny
-    execution of any ``.exe`` under the user profile, so a venv's copied
-    ``python.exe`` cannot be launched (``WinError 1260``). In that case we
-    ``pip install --target`` into this directory using the *base* interpreter
-    (which lives in an allowed location, e.g. the KADAS install root) and add
-    it to ``sys.path`` at runtime. No new executable is ever launched, so the
-    policy never triggers.
-    """
-    return os.path.join(CACHE_DIR, f"site-packages-{PYTHON_VERSION}")
-
-
-def target_install_exists() -> bool:
-    """Return True when the plain ``--target`` package directory has content."""
-    target = get_target_dir()
-    return os.path.isdir(target) and bool(os.listdir(target))
-
-
 def _add_site_dir(path: str) -> bool:
     """Prepend *path* to ``sys.path`` and run its ``.pth`` files.
 
@@ -224,13 +210,70 @@ def _add_site_dir(path: str) -> bool:
     return True
 
 
+def prefer_prefix_install() -> bool:
+    """Return True to install with pip --prefix instead of a venv.
+
+    The KADAS plugin sets GEOAGENT_NO_VENV=1 at load, because KADAS runs on
+    locked-down Windows where a venv's python.exe cannot execute. QGIS desktop
+    leaves it unset and keeps its venv install.
+    """
+    return bool(os.environ.get("GEOAGENT_NO_VENV"))
+
+
+def get_prefix_dir() -> str:
+    """Return the user-profile prefix that pip --prefix installs into."""
+    return os.path.join(CACHE_DIR, f"prefix-{PYTHON_VERSION}")
+
+
+def _prefix_scheme_paths(prefix: str) -> Dict[str, str]:
+    """Return the exact paths pip --prefix writes, for this platform's scheme."""
+    scheme = "nt" if os.name == "nt" else "posix_prefix"
+    return sysconfig.get_paths(scheme=scheme, vars={"base": prefix, "platbase": prefix})
+
+
+def get_prefix_site_packages(prefix: Optional[str] = None) -> List[str]:
+    """Return the site-packages dirs (purelib and platlib) for the prefix."""
+    paths = _prefix_scheme_paths(prefix or get_prefix_dir())
+    dirs = [paths["purelib"]]
+    if paths["platlib"] not in dirs:
+        dirs.append(paths["platlib"])
+    return dirs
+
+
+def get_prefix_scripts(prefix: Optional[str] = None) -> str:
+    """Return the console-scripts dir pip --prefix writes (Scripts or bin)."""
+    return _prefix_scheme_paths(prefix or get_prefix_dir())["scripts"]
+
+
+def prefix_install_exists() -> bool:
+    """Return True when the prefix has installed content."""
+    return any(
+        os.path.isdir(path) and bool(os.listdir(path))
+        for path in get_prefix_site_packages()
+    )
+
+
+def ensure_prefix_packages_available() -> bool:
+    """Add the prefix site-packages to sys.path and its scripts dir to PATH."""
+    added = False
+    for path in get_prefix_site_packages():
+        added = _add_site_dir(path) or added
+    scripts = get_prefix_scripts()
+    if os.path.isdir(scripts):
+        current = os.environ.get("PATH", "")
+        if scripts not in current.split(os.pathsep):
+            os.environ["PATH"] = scripts + os.pathsep + current
+    if added:
+        importlib.invalidate_caches()
+    return added
+
+
 def ensure_venv_packages_available() -> bool:
     """Add the installed package locations to ``sys.path``.
 
-    Adds both the venv's site-packages (normal machines) and the plain
-    ``--target`` directory (locked-down Windows fallback), whichever exist.
-    They are independent: on a policy-locked box there is no usable venv but
-    there is a target dir, so this must not early-return on a missing venv.
+    Adds both install locations, whichever exist: the venv's site-packages
+    (QGIS desktop) and the QPIP-style ``--prefix`` profile (KADAS). They are
+    independent, so this must not early-return on a missing venv.
 
     Safe to call multiple times (idempotent).
 
@@ -240,20 +283,12 @@ def ensure_venv_packages_available() -> bool:
     added = False
     if venv_exists():
         added = _add_site_dir(get_venv_site_packages()) or added
-    added = _add_site_dir(get_target_dir()) or added
+    added = ensure_prefix_packages_available() or added
     if added:
         # find_spec() caches negative lookups; drop them so a just-registered
         # editable finder is picked up within the same session.
         importlib.invalidate_caches()
     return added
-
-
-def ensure_target_packages_available() -> bool:
-    """Add only the plain ``--target`` package directory to ``sys.path``."""
-    if _add_site_dir(get_target_dir()):
-        importlib.invalidate_caches()
-        return True
-    return False
 
 
 def _dependency_discoverable(import_name: str) -> Tuple[bool, Optional[str]]:
@@ -424,9 +459,6 @@ def _get_subprocess_kwargs() -> dict:
 
 def _uv_usable() -> bool:
     """Return True when the cached uv binary exists and verifies successfully."""
-    if os.environ.get("GEOAGENT_SIMULATE_EXE_BLOCKED"):
-        # uv.exe lives under the cache dir and would be policy-blocked too.
-        return False
     try:
         from .uv_manager import uv_exists, verify_uv
 
@@ -496,18 +528,6 @@ def _python_executable_usable(path: str) -> Tuple[bool, str]:
     looks correct, but a subprocess fails before startup with ``No module named
     encodings``. Validate candidates before using them for ``venv`` or ``uv``.
     """
-    # Test seam: simulate a locked-down Windows image (AppLocker / SRP) that
-    # denies execution of any executable under the user profile, so the venv's
-    # copied python cannot start while the base interpreter (outside the cache
-    # dir) still can. Lets the target-dir fallback be exercised on any OS.
-    if os.environ.get("GEOAGENT_SIMULATE_EXE_BLOCKED") and os.path.abspath(
-        path
-    ).startswith(os.path.abspath(CACHE_DIR) + os.sep):
-        return (
-            False,
-            "OSError: [WinError 1260] This program is blocked by group "
-            "policy (simulated GEOAGENT_SIMULATE_EXE_BLOCKED)",
-        )
     code = (
         "import encodings, sys; "
         f"raise SystemExit(0 if sys.version_info[:2] == "
@@ -1185,24 +1205,26 @@ def install_packages(
     return False, f"pip install failed:\n{error_output}"
 
 
-def install_packages_to_target(
-    target_dir: str,
+def install_packages_to_prefix(
+    prefix_dir: str,
     packages: List[str],
     progress_callback: Optional[Callable[[int, str], None]] = None,
+    extra_pip_args: Optional[List[str]] = None,
 ) -> Tuple[bool, str]:
-    """Install packages into a plain directory via ``pip --target``.
+    """Install packages into a user-profile prefix with pip --prefix.
 
-    Used when a virtual environment cannot be created because the OS blocks
-    executing a user-profile ``python.exe`` (locked-down Windows, ``WinError
-    1260``). Runs the *base* interpreter found by ``_find_python_executable()``
-    — it sits in an allowed location — so no policy-blocked executable is ever
-    launched. The resulting directory is added to ``sys.path`` by
-    ``ensure_target_packages_available()``.
+    The no-venv path. It runs the base interpreter from
+    _find_python_executable() (which sits in an execution-allowed dir) so no
+    user-profile executable is launched, and writes into the user profile so
+    the read-only system site-packages is never touched.
+    ensure_prefix_packages_available() puts the result on sys.path and PATH.
 
     Args:
-        target_dir: Directory to install into (``get_target_dir()``).
-        packages: pip package names / wheel paths to install.
-        progress_callback: Optional ``(percent, message)`` callback.
+        prefix_dir: Prefix to install into (get_prefix_dir()).
+        packages: pip package names or wheel paths to install.
+        progress_callback: Optional (percent, message) callback.
+        extra_pip_args: Extra pip flags (e.g. --index-url or --proxy) injected
+            before the package list.
 
     Returns:
         Tuple of (success, message).
@@ -1215,7 +1237,7 @@ def install_packages_to_target(
     env = _get_clean_env()
     kwargs = _get_subprocess_kwargs()
 
-    # The base interpreter must expose pip. QGIS/KADAS builds normally bundle
+    # The base interpreter must expose pip. KADAS/QGIS builds normally bundle
     # it; if not, there is no way to install without a venv, so fail clearly.
     check = subprocess.run(  # nosec B603
         [base_python, "-m", "pip", "--version"],
@@ -1230,26 +1252,28 @@ def install_packages_to_target(
             False,
             "The base Python interpreter has no pip, so packages cannot be "
             "installed without a virtual environment (which this machine "
-            "blocks). Ask an administrator to allow executing "
-            f"{get_venv_dir()}, or to install pip for {base_python}.\n"
+            f"blocks). Ask an administrator to install pip for {base_python}.\n"
             f"Details:\n{_truncated_subprocess_output(check)}",
         )
 
-    os.makedirs(target_dir, exist_ok=True)
+    os.makedirs(prefix_dir, exist_ok=True)
     cmd = [
         base_python,
         "-m",
         "pip",
         "install",
-        "--target",
-        target_dir,
+        "--prefix",
+        prefix_dir,
         "--upgrade",
         "--disable-pip-version-check",
         "--prefer-binary",
-    ] + packages
+    ]
+    if extra_pip_args:
+        cmd += list(extra_pip_args)
+    cmd += packages
 
     if progress_callback:
-        progress_callback(20, f"Installing (pip --target): {', '.join(packages)}...")
+        progress_callback(20, f"Installing (pip --prefix): {', '.join(packages)}...")
 
     result = subprocess.run(  # nosec B603
         cmd,
@@ -1263,7 +1287,7 @@ def install_packages_to_target(
         return True, "Packages installed successfully."
     return (
         False,
-        f"pip --target install failed:\n{_truncated_subprocess_output(result)}",
+        f"pip --prefix install failed:\n{_truncated_subprocess_output(result)}",
     )
 
 
@@ -1289,8 +1313,11 @@ class DepsInstallWorker(QThread):
             start_time = time.time()
             venv_dir = get_venv_dir()
 
-            # Step 0: Download uv if needed (fast package installer)
-            if not _uv_usable():
+            # KADAS installs with pip --prefix and needs neither uv nor a venv.
+            prefer_prefix = prefer_prefix_install()
+
+            # Step 0: Download uv (fast installer). Skipped in prefix mode.
+            if not prefer_prefix and not _uv_usable():
                 self.progress.emit(2, "Downloading uv package installer...")
                 success, msg = download_uv(
                     progress_callback=lambda p, m: self.progress.emit(
@@ -1303,21 +1330,18 @@ class DepsInstallWorker(QThread):
                 else:
                     self.progress.emit(5, "uv ready.")
 
-            # Step 1: Create venv if needed, or recreate stale broken venvs.
-            # On locked-down Windows (AppLocker / SRP) this fails because the
-            # venv's python.exe cannot be launched (WinError 1260); we then
-            # fall back to a plain ``pip --target`` install driven by the base
-            # interpreter, which never launches a user-profile executable.
-            venv_error: Optional[str] = None
-            try:
-                _ensure_usable_venv(
-                    venv_dir,
-                    progress_callback=lambda p, m: self.progress.emit(p, m),
-                )
-            except RuntimeError as e:
-                venv_error = str(e)
+            # Step 1: Create the venv (QGIS only). KADAS never gets here.
+            if not prefer_prefix:
+                try:
+                    _ensure_usable_venv(
+                        venv_dir,
+                        progress_callback=lambda p, m: self.progress.emit(p, m),
+                    )
+                except RuntimeError as e:
+                    self.finished.emit(False, str(e))
+                    return
 
-            # Step 2/3: Install missing packages via the venv, or the fallback.
+            # Step 2/3: Install missing packages.
             missing = get_missing_packages(self.group_name)
             if not missing:
                 self.finished.emit(
@@ -1326,25 +1350,22 @@ class DepsInstallWorker(QThread):
                 )
                 return
 
-            if venv_error is not None:
+            if prefer_prefix:
+                # KADAS: install into the user-profile prefix, no fallback.
                 self.progress.emit(
                     15,
-                    "Virtual environment unavailable on this machine; "
-                    "installing without a venv...",
+                    "Installing dependencies into your user profile "
+                    "(pip --prefix)...",
                 )
-                success, message = install_packages_to_target(
-                    get_target_dir(),
+                success, message = install_packages_to_prefix(
+                    get_prefix_dir(),
                     missing,
                     progress_callback=lambda p, m: self.progress.emit(
                         20 + int(p * 0.65), m
                     ),
                 )
                 if not success:
-                    self.finished.emit(
-                        False,
-                        f"{message}\n\nVirtual environment could not be created:"
-                        f"\n{venv_error}",
-                    )
+                    self.finished.emit(False, message)
                     return
                 self.progress.emit(85, "Packages installed.")
             else:
