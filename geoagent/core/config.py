@@ -16,7 +16,6 @@ ProviderName = Literal[
     "ollama",
     "litellm",
     "lmstudio",
-    "eth-cluster",
     "openrouter",
     "vllm",
 ]
@@ -73,8 +72,6 @@ class GeoAgentConfig(BaseModel):
             ``litellm_base_url`` on purpose: the lmstudio provider *starts a local
             server*, so pointing it at someone's remote LiteLLM proxy would load a model
             here while talking to a host over there.
-        eth_config_path: Optional path to the ETH cluster connection config used by the
-            ``eth-cluster`` provider. ``None`` uses ``~/.config/geoagent/eth_cluster.json``.
         openrouter_base_url: OpenRouter OpenAI-compatible API base URL.
         vllm_base_url: vLLM OpenAI-compatible API base URL.
     """
@@ -99,10 +96,6 @@ class GeoAgentConfig(BaseModel):
     lmstudio_base_url: Optional[str] = Field(
         default=None,
         description="LM Studio OpenAI-compatible base URL (default http://localhost:1234/v1).",
-    )
-    eth_config_path: Optional[str] = Field(
-        default=None,
-        description="Path to the ETH cluster connection config (eth-cluster provider).",
     )
     openrouter_base_url: Optional[str] = Field(
         default=None,

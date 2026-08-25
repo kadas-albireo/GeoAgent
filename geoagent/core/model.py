@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 from typing import Any
 
 from geoagent.core.config import GeoAgentConfig, ProviderName
@@ -251,34 +250,6 @@ def resolve_model(config: GeoAgentConfig | None = None, **overrides: Any) -> Any
             client_args=client_args,
             model_id=model_id,
             params=params,
-        )
-
-    if provider == "eth-cluster":
-        from strands.models.ollama import OllamaModel
-
-        from geoagent.core.eth_cluster import ensure_tunnel, load_config
-
-        # The open-source model on the ETH Slurm GPU node. There is no bespoke client:
-        # the SSH local-forward makes the remote ollama server answer on localhost, so
-        # once the tunnel is up this is exactly the ollama provider. ensure_tunnel() is
-        # the side effect that earns this its own provider name, mirroring the lmstudio
-        # branch above -- selecting it should just work, not require a separate ritual.
-        eth_config = load_config(
-            Path(os.path.expanduser(cfg.eth_config_path))
-            if cfg.eth_config_path
-            else None
-        )
-        ensure_tunnel(eth_config)
-
-        model_id = cfg.model or eth_config.ollama_model
-        kwargs = {}
-        if cfg.max_tokens is not None:
-            kwargs["max_tokens"] = int(cfg.max_tokens)
-        return OllamaModel(
-            eth_config.base_url,
-            model_id=model_id,
-            temperature=cfg.temperature,
-            **kwargs,
         )
 
     if provider == "openrouter":

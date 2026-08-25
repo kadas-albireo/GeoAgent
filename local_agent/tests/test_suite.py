@@ -24,18 +24,17 @@ if str(REPO_ROOT) not in sys.path:
 from local_agent.suite import agents, cost, provision, report, runner  # noqa: E402
 from local_agent.suite.budget import ContextPlan  # noqa: E402
 
-
 # -- agents ------------------------------------------------------------------
 
 
 def test_registry_has_defaults():
     reg = agents.load_agents()
-    assert {"claude", "local-raw", "eth-ollama"} <= set(reg)
+    assert {"claude", "local-raw"} <= set(reg)
 
 
 def test_resolve_preserves_order_and_all():
-    names = [s.name for s in agents.resolve(["eth-ollama", "claude"])]
-    assert names == ["eth-ollama", "claude"]
+    names = [s.name for s in agents.resolve(["local-raw", "claude"])]
+    assert names == ["local-raw", "claude"]
     assert len(agents.resolve(None)) == len(agents.load_agents())
     assert len(agents.resolve(["all"])) == len(agents.load_agents())
 
@@ -51,11 +50,16 @@ def test_resolve_unknown_fails_fast():
 def test_longest_prefix_price_match():
     # claude-sonnet-4-6 must resolve via the 'claude-sonnet-4' key, not a shorter one.
     assert cost.lookup_price("claude-sonnet-4-6") == (3.0, 15.0)
-    assert cost.lookup_price("openai/gpt-4o-mini") == (0.15, 0.60)  # strips routing prefix
+    assert cost.lookup_price("openai/gpt-4o-mini") == (
+        0.15,
+        0.60,
+    )  # strips routing prefix
 
 
 def test_local_is_free_and_unknown_is_unpriced():
-    local = cost.estimate(model="qwen2.5-7b", input_tokens=9999, output_tokens=99, local=True)
+    local = cost.estimate(
+        model="qwen2.5-7b", input_tokens=9999, output_tokens=99, local=True
+    )
     assert local.usd == 0.0 and local.priced
 
     unknown = cost.estimate(model="mystery", input_tokens=1000, output_tokens=100)
@@ -64,8 +68,11 @@ def test_local_is_free_and_unknown_is_unpriced():
 
 def test_explicit_price_overrides_table_and_local():
     est = cost.estimate(
-        model="qwen2.5-7b", input_tokens=1_000_000, output_tokens=0,
-        local=True, price_in=2.0,
+        model="qwen2.5-7b",
+        input_tokens=1_000_000,
+        output_tokens=0,
+        local=True,
+        price_in=2.0,
     )
     assert est.usd == pytest.approx(2.0) and est.priced
 
@@ -75,9 +82,17 @@ def test_explicit_price_overrides_table_and_local():
 
 def _plan(**kw):
     base = dict(
-        agent="x", model="m", window=8192, usable=4915, fast=False,
-        system_tokens=2000, tool_count=62, tool_tokens=10600,
-        api_docs_tokens=0, upskill_tokens=0, prompt_tokens=20,
+        agent="x",
+        model="m",
+        window=8192,
+        usable=4915,
+        fast=False,
+        system_tokens=2000,
+        tool_count=62,
+        tool_tokens=10600,
+        api_docs_tokens=0,
+        upskill_tokens=0,
+        prompt_tokens=20,
     )
     base.update(kw)
     return ContextPlan(**base)
@@ -108,7 +123,7 @@ def test_compose_prompt_noop_when_nothing_injected():
 
 def test_provision_canonical_aliases():
     assert provision._canonical("local") == "lmstudio"
-    assert provision._canonical("cluster") == "eth"
+    assert provision._canonical("lms") == "lmstudio"
     with pytest.raises(ValueError):
         provision._canonical("nonsense")
 
@@ -119,11 +134,21 @@ def test_provision_canonical_aliases():
 def test_render_plan_marks_overflow_and_local_cost():
     rows = [
         {
-            "agent": "local-raw", "test_id": "E01", "difficulty": "easy",
-            "model": "qwen2.5-7b-instruct", "window": 8192, "fixed_overhead": 12000,
-            "headroom": -7085, "fits": False, "tool_tokens": 10600,
-            "api_docs_tokens": 0, "upskill_tokens": 0, "usd_per_turn": 0.0,
-            "priced": True, "adaptations": [], "recommendations": ["try fast=True"],
+            "agent": "local-raw",
+            "test_id": "E01",
+            "difficulty": "easy",
+            "model": "qwen2.5-7b-instruct",
+            "window": 8192,
+            "fixed_overhead": 12000,
+            "headroom": -7085,
+            "fits": False,
+            "tool_tokens": 10600,
+            "api_docs_tokens": 0,
+            "upskill_tokens": 0,
+            "usd_per_turn": 0.0,
+            "priced": True,
+            "adaptations": [],
+            "recommendations": ["try fast=True"],
         }
     ]
     out = report.render_plan(rows)
@@ -157,7 +182,7 @@ def test_planning_helpers():
 
 def test_plan_flag_on_agentspec():
     reg = agents.load_agents()
-    assert "eth-plan" in reg and reg["eth-plan"].plan is True
+    assert "local-plan" in reg and reg["local-plan"].plan is True
     assert reg["claude"].plan is False  # default off
 
 

@@ -43,7 +43,6 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from geoagent.core import context_docs  # noqa: E402
-from local_agent import connection  # noqa: E402
 from local_agent.skills import selector  # noqa: E402
 from local_agent.telemetry import screenshot as screenshot_mod  # noqa: E402
 from local_agent.telemetry.tracker import BenchmarkTracker, summarize  # noqa: E402
@@ -54,12 +53,6 @@ SKILL_BUNDLE = REPO_ROOT / "local_agent" / "skills" / "skills_prompt.md"
 
 LM_STUDIO_BASE_URL = "http://localhost:1234/v1"
 LOCAL_MODEL_ID = "openai/qwen2.5-7b-instruct"
-
-# The ETH hybrid target, read from local_agent/config.json so the tunnel manager and the
-# eval runner cannot disagree about which node/model is in play.
-_CONNECTION = connection.load_config()
-ETH_OLLAMA_HOST = _CONNECTION.base_url
-ETH_OLLAMA_MODEL = _CONNECTION.ollama_model
 
 # The agents under comparison. 'upskill' prepends the bundled SKILL.md files to the
 # system prompt, which is the whole hypothesis under test.
@@ -111,27 +104,6 @@ AGENT_CONFIGS: dict[str, dict[str, Any]] = {
         "upskill": True,
         "api_docs": True,
         "note": "+ both. Do they compound, or does the extra context dilute?",
-    },
-    # The ETH hybrid path: model on a Slurm GPU node, reached through the SSH tunnel
-    # (local_agent/connection.py). The tunnel makes the remote server look local, so this
-    # is just the ollama provider pointed at localhost -- no special plumbing.
-    # Measured round-trip through the tunnel: 7.6 ms median, i.e. ~45 ms across a
-    # 6-call turn. Network is not the bottleneck; the node's GPU is the point.
-    "eth-ollama": {
-        "provider": "ollama",
-        "model_id": ETH_OLLAMA_MODEL,
-        "ollama_host": ETH_OLLAMA_HOST,
-        "upskill": False,
-        "api_docs": False,
-        "note": "ETH Slurm node via SSH tunnel. Run `connection doctor` first.",
-    },
-    "eth-ollama-both": {
-        "provider": "ollama",
-        "model_id": ETH_OLLAMA_MODEL,
-        "ollama_host": ETH_OLLAMA_HOST,
-        "upskill": True,
-        "api_docs": True,
-        "note": "ETH node + skill + API docs.",
     },
 }
 
@@ -232,9 +204,11 @@ def build_turn_prompt(config_name: str, prompt: str) -> tuple[str, dict[str, Any
 
         fragment = operations_guide.build_block()
         if fragment:
-            meta["skill"] = "kadas-operations (" + ",".join(
-                operations_guide.selected_tiers(None)
-            ) + ")"
+            meta["skill"] = (
+                "kadas-operations ("
+                + ",".join(operations_guide.selected_tiers(None))
+                + ")"
+            )
             blocks.append(fragment)
 
     if spec.get("api_docs"):
