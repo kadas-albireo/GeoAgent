@@ -1556,34 +1556,6 @@
             <span class="n">params</span><span class="o">=</span><span class="n">params</span><span class="p">,</span>
         <span class="p">)</span>
 
-    <span class="k">if</span> <span class="n">provider</span> <span class="o">==</span> <span class="s2">"eth-cluster"</span><span class="p">:</span>
-        <span class="kn">from</span><span class="w"> </span><span class="nn">strands.models.ollama</span><span class="w"> </span><span class="kn">import</span> <span class="n">OllamaModel</span>
-
-        <span class="kn">from</span><span class="w"> </span><span class="nn">geoagent.core.eth_cluster</span><span class="w"> </span><span class="kn">import</span> <span class="n">ensure_tunnel</span><span class="p">,</span> <span class="n">load_config</span>
-
-        <span class="c1"># The open-source model on the ETH Slurm GPU node. There is no bespoke client:</span>
-        <span class="c1"># the SSH local-forward makes the remote ollama server answer on localhost, so</span>
-        <span class="c1"># once the tunnel is up this is exactly the ollama provider. ensure_tunnel() is</span>
-        <span class="c1"># the side effect that earns this its own provider name, mirroring the lmstudio</span>
-        <span class="c1"># branch above -- selecting it should just work, not require a separate ritual.</span>
-        <span class="n">eth_config</span> <span class="o">=</span> <span class="n">load_config</span><span class="p">(</span>
-            <span class="n">Path</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">expanduser</span><span class="p">(</span><span class="n">cfg</span><span class="o">.</span><span class="n">eth_config_path</span><span class="p">))</span>
-            <span class="k">if</span> <span class="n">cfg</span><span class="o">.</span><span class="n">eth_config_path</span>
-            <span class="k">else</span> <span class="kc">None</span>
-        <span class="p">)</span>
-        <span class="n">ensure_tunnel</span><span class="p">(</span><span class="n">eth_config</span><span class="p">)</span>
-
-        <span class="n">model_id</span> <span class="o">=</span> <span class="n">cfg</span><span class="o">.</span><span class="n">model</span> <span class="ow">or</span> <span class="n">eth_config</span><span class="o">.</span><span class="n">ollama_model</span>
-        <span class="n">kwargs</span> <span class="o">=</span> <span class="p">{}</span>
-        <span class="k">if</span> <span class="n">cfg</span><span class="o">.</span><span class="n">max_tokens</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
-            <span class="n">kwargs</span><span class="p">[</span><span class="s2">"max_tokens"</span><span class="p">]</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">cfg</span><span class="o">.</span><span class="n">max_tokens</span><span class="p">)</span>
-        <span class="k">return</span> <span class="n">OllamaModel</span><span class="p">(</span>
-            <span class="n">eth_config</span><span class="o">.</span><span class="n">base_url</span><span class="p">,</span>
-            <span class="n">model_id</span><span class="o">=</span><span class="n">model_id</span><span class="p">,</span>
-            <span class="n">temperature</span><span class="o">=</span><span class="n">cfg</span><span class="o">.</span><span class="n">temperature</span><span class="p">,</span>
-            <span class="o">**</span><span class="n">kwargs</span><span class="p">,</span>
-        <span class="p">)</span>
-
     <span class="k">if</span> <span class="n">provider</span> <span class="o">==</span> <span class="s2">"openrouter"</span><span class="p">:</span>
         <span class="kn">from</span><span class="w"> </span><span class="nn">strands.models.openai</span><span class="w"> </span><span class="kn">import</span> <span class="n">OpenAIModel</span>
 
