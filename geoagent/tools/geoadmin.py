@@ -101,13 +101,42 @@ _BOX2D_RE = re.compile(
 
 
 def _fetch_json(url: str) -> Any:
-    """Fetch and parse JSON from the geoadmin REST API (HTTPS-only)."""
+    """Fetch and parse JSON from the geoadmin REST API (HTTPS-only).
+
+    Uses QgsBlockingNetworkRequest so the request honours KADAS' configured
+    proxy, auth and SSL, falling back to urllib only when QGIS is absent
+    (headless CI).
+    """
     parsed = urlparse(url)
     if parsed.scheme.lower() != "https" or parsed.hostname != GEOADMIN_HOST:
         raise ValueError(f"Refusing non-geoadmin or non-HTTPS URL: {url!r}")
-    req = Request(url, headers={"User-Agent": _USER_AGENT})
-    with urlopen(req, timeout=HTTP_TIMEOUT) as response:  # nosec B310 - pinned HTTPS
-        return json.loads(response.read().decode("utf-8"))
+    return json.loads(_http_get_bytes(url).decode("utf-8"))
+
+
+def _http_get_bytes(url: str) -> bytes:
+    """GET *url*, returning the raw body. Qt stack first, urllib fallback."""
+    try:
+        from qgis.core import QgsBlockingNetworkRequest  # type: ignore[import-not-found]
+        from qgis.PyQt.QtCore import QUrl  # type: ignore[import-not-found]
+        from qgis.PyQt.QtNetwork import (  # type: ignore[import-not-found]
+            QNetworkRequest,
+        )
+    except ImportError:
+        req = Request(url, headers={"User-Agent": _USER_AGENT})
+        with urlopen(
+            req, timeout=HTTP_TIMEOUT
+        ) as response:  # nosec B310 - pinned HTTPS
+            return response.read()
+
+    request = QNetworkRequest(QUrl(url))
+    request.setRawHeader(b"User-Agent", _USER_AGENT.encode("ascii"))
+    blocking = QgsBlockingNetworkRequest()
+    err = blocking.get(request)
+    if err != QgsBlockingNetworkRequest.NoError:
+        raise RuntimeError(
+            f"geoadmin request failed ({err}): {blocking.errorMessage()}"
+        )
+    return bytes(blocking.reply().content())
 
 
 def _layers_config(*, force: bool = False) -> dict[str, Any]:
