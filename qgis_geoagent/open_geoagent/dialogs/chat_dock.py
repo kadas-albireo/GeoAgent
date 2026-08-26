@@ -83,22 +83,17 @@ DEFAULT_MODELS = {
     "gemini": "gemini-3.1-pro-preview",
     "ollama": "qwen3.5:4b",
     "litellm": "openai/gpt-5.5",
-    # Both of these are deliberately blank: they are zero-configuration choices, and the
-    # provider resolves the model itself.
-    #   lmstudio    -> starts the LM Studio server and uses whichever model LM Studio
-    #                  has loaded, at its maximum context (geoagent.core.lmstudio).
-    #   eth-cluster -> opens the SSH tunnel to the ETH Slurm GPU node and uses the model
-    #                  named in the connection config (geoagent.core.eth_cluster).
+    # Deliberately blank: a zero-configuration choice where the provider resolves
+    # the model itself. lmstudio starts the LM Studio server and uses whichever
+    # model LM Studio has loaded, at its maximum context (geoagent.core.lmstudio).
     # A hardcoded id here would be a lie for any user with a different model downloaded.
     "lmstudio": "",
-    "eth-cluster": "",
     "openrouter": "deepseek/deepseek-chat",
     "vllm": "",
 }
 PROVIDERS = [
     "anthropic",
     "bedrock",
-    "eth-cluster",
     "gemini",
     "litellm",
     "lmstudio",
@@ -112,11 +107,6 @@ PROVIDERS = [
 # instead of leaving the user to wonder which field to fill in.
 SELF_CONFIGURING_PROVIDERS = {
     "lmstudio": "Local LM Studio model (auto-detects the loaded model).",
-    "eth-cluster": (
-        "Open-source model on the ETH student cluster, over an SSH tunnel. "
-        "Needs a one-time terminal login: "
-        "python -m geoagent.core.eth_cluster login"
-    ),
 }
 MAX_CONTEXT_MESSAGES = 12
 MAX_CONTEXT_CHARS = 12000
@@ -511,12 +501,10 @@ def _format_chat_worker_error(exc, provider="", agent_mode=""):
     mode_label = agent_mode or "this mode"
     is_opera_mode = "opera" in agent_mode.lower()
 
-    # Setup failures from the self-configuring providers already say exactly what to do
-    # ("run: lms get ...", "python -m geoagent.core.eth_cluster login"). Return them
-    # verbatim, and do it *first*: ConnectionError_ lowercases to "connectionerror_",
-    # which would otherwise match the generic TLS/connection branch below and bury the
-    # instruction under advice about checking the user's proxy.
-    if cls_name in ("lmstudioerror", "connectionerror_"):
+    # Setup failures from the self-configuring providers already say exactly what to
+    # do ("run: lms get ..."). Return them verbatim, and do it *first* so the message
+    # is not buried under the generic TLS/connection advice branch below.
+    if cls_name == "lmstudioerror":
         return raw
 
     try:

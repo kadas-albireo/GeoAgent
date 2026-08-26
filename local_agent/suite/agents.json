@@ -50,66 +50,14 @@
       "note": "+ both. Compound or dilute?"
     },
     {
-      "name": "eth-ollama",
-      "provider": "ollama",
-      "model": "qwen2.5:7b-instruct",
-      "ollama_host": "http://localhost:11434",
-      "context_window": 32768,
-      "local": true,
-      "note": "ETH Slurm node via SSH tunnel, nothing injected. `suite provision eth` first."
-    },
-    {
-      "name": "eth-docs",
-      "provider": "ollama",
-      "model": "qwen2.5:7b-instruct",
-      "ollama_host": "http://localhost:11434",
-      "context_window": 32768,
-      "local": true,
-      "api_docs": true,
-      "note": "ETH node + injected KADAS API reference (documancer)."
-    },
-    {
-      "name": "eth-upskilled",
-      "provider": "ollama",
-      "model": "qwen2.5:7b-instruct",
-      "ollama_host": "http://localhost:11434",
-      "context_window": 32768,
-      "local": true,
-      "upskill": true,
-      "note": "ETH node + operations guide (upskilling)."
-    },
-    {
-      "name": "eth-both",
-      "provider": "ollama",
-      "model": "qwen2.5:7b-instruct",
-      "ollama_host": "http://localhost:11434",
-      "context_window": 32768,
-      "local": true,
-      "api_docs": true,
-      "upskill": true,
-      "note": "ETH node + docs + upskilling. Do they compound or dilute?"
-    },
-    {
-      "name": "eth-plan",
-      "provider": "ollama",
-      "model": "qwen2.5:7b-instruct",
-      "ollama_host": "http://localhost:11434",
+      "name": "local-plan",
+      "provider": "lmstudio",
+      "model": "qwen2.5-7b-instruct",
+      "base_url": "http://localhost:1234/v1",
       "context_window": 32768,
       "local": true,
       "plan": true,
-      "note": "ETH node + plan-first reasoning. Isolates the planning pass."
-    },
-    {
-      "name": "eth-plan-both",
-      "provider": "ollama",
-      "model": "qwen2.5:7b-instruct",
-      "ollama_host": "http://localhost:11434",
-      "context_window": 32768,
-      "local": true,
-      "api_docs": true,
-      "upskill": true,
-      "plan": true,
-      "note": "ETH node + docs + upskilling + plan-first. The full small-model stack."
+      "note": "+ plan-first reasoning. Isolates the planning pass."
     }
   ]
 }

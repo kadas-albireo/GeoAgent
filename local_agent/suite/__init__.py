@@ -19,7 +19,7 @@ Design rules (inherited from ``local_agent/CLAUDE.md``):
   symbols are imported lazily inside function bodies. This keeps ``budget``/``cost``/
   ``report`` runnable on any box and unit-testable in CI.
 - **Reuse, don't duplicate.** This layer orchestrates existing modules
-  (``geoagent.core.lmstudio``, ``geoagent.core.eth_cluster``, ``geoagent.core.context_docs``,
+  (``geoagent.core.lmstudio``, ``geoagent.core.context_docs``,
   ``local_agent.skills.selector``, ``local_agent.telemetry.tracker``,
   ``local_agent.tests.evaluators``) rather than reimplementing them.
 """

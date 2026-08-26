@@ -304,7 +304,6 @@ def test_self_configuring_providers_default_to_a_blank_model() -> None:
     defaults = _plugin_constant("DEFAULT_MODELS")
 
     assert defaults["lmstudio"] == ""
-    assert defaults["eth-cluster"] == ""
 
 
 def test_a_blank_model_auto_detects_the_loaded_lmstudio_model(monkeypatch) -> None:

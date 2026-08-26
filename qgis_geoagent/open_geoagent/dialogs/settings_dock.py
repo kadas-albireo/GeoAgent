@@ -644,7 +644,9 @@ class SettingsDockWidget(QDockWidget):
 
         # Prompt-time guidance injection (KADAS/QGIS agent modes). Independent axes:
         # docs = the API reference matched to the prompt; upskilling = the operations guide.
-        self.inject_api_docs_check = QCheckBox("Inject API docs for the prompt (documancer)")
+        self.inject_api_docs_check = QCheckBox(
+            "Inject API docs for the prompt (documancer)"
+        )
         self.inject_api_docs_check.setToolTip(
             "Prepend the KADAS/PyQGIS API reference relevant to each prompt, so the model "
             "uses real method signatures instead of guessing. Retrieved by keyword from "
@@ -1101,7 +1103,7 @@ class SettingsDockWidget(QDockWidget):
         """Update the model field and its hint when the provider changes."""
         self.model_input.setText(DEFAULT_MODELS.get(provider, ""))
         hint = SELF_CONFIGURING_PROVIDERS.get(provider)
-        # lmstudio/eth-cluster resolve the model themselves, so blank is correct here and
+        # lmstudio resolves the model itself, so blank is correct here and
         # "Provider default" would imply a fixed id that does not exist.
         self.model_input.setPlaceholderText(
             "Auto-detect (leave blank)" if hint else "Provider default"

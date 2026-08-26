@@ -124,15 +124,6 @@ DEFAULT_AGENTS: dict[str, AgentSpec] = {
         upskill=True,
         note="+ both. Do they compound, or does the extra context dilute tool choice?",
     ),
-    "eth-ollama": AgentSpec(
-        name="eth-ollama",
-        provider="ollama",
-        model="qwen2.5:7b-instruct",
-        ollama_host="http://localhost:11434",
-        context_window=32_768,
-        local=True,
-        note="ETH Slurm node via SSH tunnel. `suite provision eth` first.",
-    ),
 }
 
 
