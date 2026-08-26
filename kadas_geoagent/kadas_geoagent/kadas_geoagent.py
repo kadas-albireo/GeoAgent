@@ -43,6 +43,11 @@ class KadasGeoAgent(QObject):
             "GEOAGENT_RUN_LOG_DIR", os.path.join(_plugin_root, "runs")
         )
 
+        # KADAS runs on locked-down Windows where a venv's python.exe cannot
+        # execute, so install dependencies with pip --prefix instead of a venv.
+        # deps_manager reads this flag (prefer_prefix_install).
+        os.environ["GEOAGENT_NO_VENV"] = "1"
+
         # Cast to the KADAS interface (same pattern as kadas_mbtiles), then
         # wrap it so the shared GeoAgent code sees a QGIS-style ``iface``.
         self.kadas_iface = KadasPluginInterface.cast(iface)
@@ -107,9 +112,7 @@ class KadasGeoAgent(QObject):
         """Show, create, or hide the chat dock (hides settings when shown)."""
         if self._dependencies_missing():
             self._show_settings_dock(dependencies_tab=True)
-            self._warn(
-                "Install missing dependencies before opening the chat panel."
-            )
+            self._warn("Install missing dependencies before opening the chat panel.")
             return
 
         # Already open: clicking the ribbon entry again closes it.
@@ -152,9 +155,7 @@ class KadasGeoAgent(QObject):
             if widget_cls is None:
                 self._set_checked(self.settings_action, False)
                 return
-            self._settings_dock = widget_cls(
-                self.iface, self.kadas_iface.mainWindow()
-            )
+            self._settings_dock = widget_cls(self.iface, self.kadas_iface.mainWindow())
             self._settings_dock.setObjectName("KadasGeoAgentSettingsDock")
             self._add_dock(self._settings_dock)
 
@@ -164,9 +165,7 @@ class KadasGeoAgent(QObject):
             self._chat_dock,
             self.chat_action,
         )
-        if dependencies_tab and hasattr(
-            self._settings_dock, "show_dependencies_tab"
-        ):
+        if dependencies_tab and hasattr(self._settings_dock, "show_dependencies_tab"):
             self._settings_dock.show_dependencies_tab()
 
     # -- Helpers ---------------------------------------------------------
@@ -271,9 +270,7 @@ class KadasGeoAgent(QObject):
         try:
             import importlib
 
-            module = importlib.import_module(
-                f"open_geoagent.dialogs.{module_name}"
-            )
+            module = importlib.import_module(f"open_geoagent.dialogs.{module_name}")
             return getattr(module, class_name)
         except Exception as exc:
             self._error(f"Failed to load the {class_name} panel:\n{exc}")
@@ -288,6 +285,4 @@ class KadasGeoAgent(QObject):
 
     def _error(self, message):
         """Show a critical dialog parented to the KADAS main window."""
-        QMessageBox.critical(
-            self.kadas_iface.mainWindow(), "KADAS GeoAgent", message
-        )
+        QMessageBox.critical(self.kadas_iface.mainWindow(), "KADAS GeoAgent", message)
