@@ -18,9 +18,9 @@ from geoagent.tools.anymap import anymap_tools
 from geoagent.tools.browser_maplibre import browser_maplibre_tools
 from geoagent.tools.geoai import geoai_tools
 from geoagent.tools.gee_data_catalogs import gee_data_catalogs_tools
-from geoagent.tools.geoadmin import geoadmin_tools
 from geoagent.tools.hypercoast import hypercoast_tools
 from geoagent.tools.kadas import kadas_tools
+from geoagent.tools.kadas_sources import kadas_sources_tools
 from geoagent.tools.kadas_terrain import kadas_terrain_tools
 from geoagent.tools.capabilities import capability_tools
 from geoagent.tools.external_files import external_files_tools
@@ -295,33 +295,28 @@ Workflow guidance:
 KADAS_SYSTEM_PROMPT = """\
 You are an AI assistant embedded in KADAS Albireo 2 a QGIS-based mapping
 application used mainly with Swiss swisstopo geodata. You have the standard
-QGIS layer/canvas tools PLUS KADAS-specific tools for the swisstopo geoadmin
-catalog, place-name search, and KADAS-native map annotations. Prefer these
-dedicated tools over writing PyQGIS by hand.
+QGIS layer/canvas tools PLUS KADAS-specific tools for KADAS' own geocatalog,
+place search, and KADAS-native map annotations. Prefer these dedicated tools
+over writing PyQGIS by hand.
 
-How KADAS operates (use this to choose tools):
-- KADAS does not ship a fixed layer list. The layer catalogue the user browses
-  is the live swisstopo geoadmin catalog (886 layers), and place search uses
-  the geoadmin SearchServer. Coordinates the user gives are WGS84 lon/lat;
-  Swiss local data is usually in LV95 (EPSG:2056). The default basemaps are
-  swisstopo WMTS tiles (national maps, SWISSIMAGE aerial, hillshade).
+Where data comes from (use this to choose tools):
+- KADAS' configuration decides the data sources, not you: which catalogs the
+  user browses, whether place search uses an online or a local offline service,
+  which layer is the heightmap. describe_data_sources reports this (online/
+  offline mode, catalog providers, search order, local layers). Never build a
+  service URL yourself; reach data only through the dedicated tools.
+- Prefer local data: already-loaded layers and local files first, then the
+  KADAS-configured catalog and search services. Coordinates the user gives are
+  WGS84 lon/lat; Swiss local data is usually in LV95 (EPSG:2056).
 
 Catalog & data loading:
-- To find a layer for a topic ("aerial photos", "electric stations", "property
-  boundaries", "railways"), call search_geoadmin_catalog to resolve the topic
-  to a layerBodId, then load_geoadmin_layer with that bod_id. Do not guess
-  bodIds.
-- load_geoadmin_layer is the ONLY correct way to add a swisstopo/geoadmin layer:
-  it loads via the official WMS service exactly like the KADAS geocatalog. NEVER
-  load swisstopo layers with add_xyz_tile_layer, add_raster_layer, or a
-  hand-built WMTS/XYZ tile URL (e.g. .../{z}/{x}/{y}.png). Those use the wrong
-  tiling scheme/CRS for the swisstopo grid and render as a blank layer. If
-  load_geoadmin_layer fails, report the error — do not fall back to a tile URL.
-- Known mappings you can use directly: aerial/SWISSIMAGE ->
-  ch.swisstopo.swissimage-product; national map (colour) ->
-  ch.swisstopo.pixelkarte-farbe; hillshade ->
-  ch.swisstopo.swissalti3d-reliefschattierung; cadastre/property boundaries ->
-  ch.kantone.cadastralwebmap-farbe.
+- To find a layer for a topic ("aerial photos", "railways", "TLM hydrography"),
+  call search_catalog, then load_catalog_layer with the returned catalog_id.
+  This searches and loads exactly what the user's catalog panel shows. Do not
+  guess catalog ids.
+- NEVER add a catalog layer with add_xyz_tile_layer, add_raster_layer, or a
+  hand-built WMS/WMTS/XYZ URL. Those bypass KADAS' configuration and render
+  blank on the swisstopo grid. If load_catalog_layer fails, report the error.
 - For local files the user names, use the QGIS add_vector_layer /
   add_raster_layer tools.
 - To measure distance between two loaded features, select them and use
@@ -329,9 +324,11 @@ Catalog & data loading:
 
 Place search / navigation:
 - To find a place ("Matterhorn", "Basel main station", "Thunplatz, Bern"), call
-  search_location to get WGS84 coordinates and a bbox, then center/zoom with the
-  QGIS set_center / zoom_to_extent tools, or use locate_and_zoom for a one-shot
-  recentre. Never fabricate coordinates.
+  search_location (WGS84 coordinates and bbox) or locate_and_zoom (one-shot
+  recentre). Both use KADAS' own search, local data first: loaded layers, pins,
+  then the configured Swiss and world location services. If the local hit is
+  not the place meant, repeat with source="swiss_locations". Never fabricate
+  coordinates.
 
 KADAS-native annotations (markers and shapes):
 - Use the dedicated KADAS tools, NOT QgsAnnotation or temporary vector layers:
@@ -624,8 +621,8 @@ def assemble_tools(
     include_leafmap: bool = False,
     include_anymap: bool = False,
     include_qgis: bool = False,
-    include_geoadmin: bool = False,
     include_kadas: bool = False,
+    include_kadas_sources: bool = False,
     include_capabilities: bool = False,
     include_osm: bool = False,
     include_external_files: bool = False,
@@ -666,12 +663,6 @@ def assemble_tools(
         qt = _filter_by_imports(qgis_tools(context.qgis_iface, context.qgis_project))
         register_all_tools(registry, qt)
         collected.extend(qt)
-    if include_geoadmin:
-        gat = _filter_by_imports(
-            geoadmin_tools(context.qgis_iface, context.qgis_project)
-        )
-        register_all_tools(registry, gat)
-        collected.extend(gat)
     if include_kadas:
         kt = _filter_by_imports(kadas_tools(context.qgis_iface, context.qgis_project))
         register_all_tools(registry, kt)
@@ -681,6 +672,12 @@ def assemble_tools(
         )
         register_all_tools(registry, ktt)
         collected.extend(ktt)
+    if include_kadas_sources:
+        kst = _filter_by_imports(
+            kadas_sources_tools(context.qgis_iface, context.qgis_project)
+        )
+        register_all_tools(registry, kst)
+        collected.extend(kst)
     if include_capabilities:
         ct = _filter_by_imports(
             capability_tools(context.qgis_iface, context.qgis_project)
@@ -1035,8 +1032,8 @@ def for_kadas(
     """Bind an agent to KADAS Albireo 2.
 
     Exposes the general QGIS map/project tools plus the KADAS-specific surface:
-    the swisstopo geoadmin catalog and location search
-    (:mod:`geoagent.tools.geoadmin`) and KADAS-native map annotations
+    KADAS' own configured catalog and place search
+    (:mod:`geoagent.tools.kadas_sources`) and KADAS-native map annotations
     (:mod:`geoagent.tools.kadas`). ``iface`` is typically a
     :class:`~kadas_geoagent.kadas_iface_adapter.KadasIfaceAdapter`.
 
@@ -1062,8 +1059,8 @@ def for_kadas(
     tools, registry = assemble_tools(
         context=ctx,
         include_qgis=True,
-        include_geoadmin=True,
         include_kadas=True,
+        include_kadas_sources=True,
         include_capabilities=True,
         include_osm=True,
         include_external_files=True,
