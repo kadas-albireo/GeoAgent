@@ -22,6 +22,7 @@ PROVIDER_NAMES: tuple[str, ...] = (
     "bedrock",
     "litellm",
     "openrouter",
+    "apertus",
     "ollama",
     "vllm",
 )
@@ -34,6 +35,7 @@ DEFAULT_MODEL_BY_PROVIDER: dict[str, str] = {
     "bedrock": "us.anthropic.claude-sonnet-4-6",
     "litellm": "openai/gpt-5.5",
     "openrouter": "deepseek/deepseek-chat",
+    "apertus": "swiss-ai/apertus-v1.5-70b",
     "ollama": "qwen3.5:4b",
     "vllm": "",
 }

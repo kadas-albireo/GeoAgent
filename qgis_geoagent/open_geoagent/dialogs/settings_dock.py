@@ -77,6 +77,8 @@ ENV_FALLBACKS = {
     "litellm_base_url": ("LITELLM_BASE_URL",),
     "openrouter_api_key": ("OPENROUTER_API_KEY",),
     "openrouter_base_url": ("OPENROUTER_BASE_URL",),
+    "apertus_api_key": ("APERTUS_API_KEY",),
+    "apertus_base_url": ("APERTUS_BASE_URL",),
     "vllm_api_key": ("VLLM_API_KEY",),
     "vllm_base_url": ("VLLM_BASE_URL",),
 }
@@ -716,6 +718,14 @@ class SettingsDockWidget(QDockWidget):
         )
         credentials_form.addRow("OpenRouter base URL:", self.openrouter_base_url_input)
 
+        self.apertus_key_input = QLineEdit()
+        self.apertus_key_input.setEchoMode(password_mode)
+        credentials_form.addRow("Apertus API key:", self.apertus_key_input)
+
+        self.apertus_base_url_input = QLineEdit()
+        self.apertus_base_url_input.setPlaceholderText("https://api.publicai.co/v1")
+        credentials_form.addRow("Apertus base URL:", self.apertus_base_url_input)
+
         self.vllm_key_input = QLineEdit()
         self.vllm_key_input.setEchoMode(password_mode)
         self.vllm_key_input.setPlaceholderText("Optional; often EMPTY for local vLLM")
@@ -1166,6 +1176,8 @@ class SettingsDockWidget(QDockWidget):
             ("litellm_base_url", self.litellm_base_url_input),
             ("openrouter_api_key", self.openrouter_key_input),
             ("openrouter_base_url", self.openrouter_base_url_input),
+            ("apertus_api_key", self.apertus_key_input),
+            ("apertus_base_url", self.apertus_base_url_input),
             ("vllm_api_key", self.vllm_key_input),
             ("vllm_base_url", self.vllm_base_url_input),
         )
@@ -1342,6 +1354,8 @@ class SettingsDockWidget(QDockWidget):
             "litellm_base_url",
             "openrouter_api_key",
             "openrouter_base_url",
+            "apertus_api_key",
+            "apertus_base_url",
             "vllm_api_key",
             "vllm_base_url",
             *OAUTH_CONFIG_KEYS,

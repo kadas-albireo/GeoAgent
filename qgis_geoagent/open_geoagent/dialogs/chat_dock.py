@@ -90,10 +90,12 @@ DEFAULT_MODELS = {
     # different model downloaded.
     "lmstudio": "",
     "openrouter": "deepseek/deepseek-chat",
+    "apertus": "swiss-ai/apertus-v1.5-70b",
     "vllm": "",
 }
 PROVIDERS = [
     "anthropic",
+    "apertus",
     "bedrock",
     "gemini",
     "litellm",
@@ -493,6 +495,8 @@ def _apply_environment_from_settings(settings):
         "litellm_base_url": "LITELLM_BASE_URL",
         "openrouter_api_key": "OPENROUTER_API_KEY",  # pragma: allowlist secret
         "openrouter_base_url": "OPENROUTER_BASE_URL",
+        "apertus_api_key": "APERTUS_API_KEY",  # pragma: allowlist secret
+        "apertus_base_url": "APERTUS_BASE_URL",
         "vllm_api_key": "VLLM_API_KEY",  # pragma: allowlist secret
         "vllm_base_url": "VLLM_BASE_URL",
     }

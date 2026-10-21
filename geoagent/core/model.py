@@ -293,6 +293,28 @@ def resolve_model(config: GeoAgentConfig | None = None, **overrides: Any) -> Any
             params=params,
         )
 
+    if provider == "apertus":
+        from geoagent.core.apertus import DEFAULT_BASE_URL, DEFAULT_MODEL, ApertusModel
+
+        model_id = cfg.model or os.environ.get("APERTUS_MODEL", DEFAULT_MODEL)
+        client_args = dict(cfg.client_args)
+        api_key = client_args.get("api_key") or os.environ.get("APERTUS_API_KEY")
+        if not api_key:
+            raise ValueError(
+                "Apertus provider requires an API key. Set APERTUS_API_KEY "
+                "or pass client_args={'api_key': ...}."
+            )
+        client_args["api_key"] = api_key
+        client_args["base_url"] = (
+            client_args.get("base_url")
+            or cfg.apertus_base_url
+            or os.environ.get("APERTUS_BASE_URL")
+            or DEFAULT_BASE_URL
+        )
+        params = {"temperature": cfg.temperature}
+        params.update(_token_param("max_tokens", cfg.max_tokens))
+        return ApertusModel(client_args=client_args, model_id=model_id, params=params)
+
     if provider == "vllm":
         from strands_vllm import VLLMModel
 
