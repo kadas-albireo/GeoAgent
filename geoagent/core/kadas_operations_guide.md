@@ -54,11 +54,13 @@ when you need it, arrives via the injected API reference (see Reference).
   `zoom_to_extent`. Fine control: `set_center`, `set_scale`, `zoom_in`, `zoom_out`.
 
 **Coordinates & search**
-- Coordinates of a place without moving: `search_location`. Convert: `convert_coordinates`.
+- Coordinates of a place without moving: `search_location` (KADAS search, local data
+  first; `source="swiss_locations"` to skip local hits). Convert: `convert_coordinates`.
 
-**swisstopo / geoadmin**
-- Named swisstopo layer: `search_geoadmin_catalog(query)` -> `load_geoadmin_layer(id)`;
-  inspect with `get_geoadmin_layer_info`.
+**Catalog & data sources**
+- Named layer from the KADAS geocatalog: `search_catalog(query)` ->
+  `load_catalog_layer(catalog_id)`.
+- Where data comes from (online/offline, catalogs, local layers): `describe_data_sources`.
 
 **Drawing / redlining** (all positions WGS84 lon/lat; sizes metres)
 - Marker with label: `add_map_marker` (label is an argument - do not add a separate
@@ -69,7 +71,7 @@ when you need it, arrives via the injected API reference (see Reference).
 
 **Terrain**
 - Elevation at a point: `get_elevation_at`. Line of sight: `check_line_of_sight`
-  (resolve + convert endpoints first). Hillshade: load a DTM (`load_geoadmin_layer`) ->
+  (resolve + convert endpoints first). Hillshade: load a DTM (`search_catalog` -> `load_catalog_layer`) ->
   `create_hillshade_layer`.
 
 **OSM features**

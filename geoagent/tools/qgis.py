@@ -1133,8 +1133,7 @@ def qgis_tools(iface: Any, project: Optional[Any] = None) -> list[Any]:
             # same kApp->addRasterLayer a manual geocatalog click runs), which is
             # what actually renders the layer on the KADAS canvas. A layer added
             # via a bare QgsProject.addMapLayer is valid but stays blank in KADAS.
-            # (load_geoadmin_layer already loads this way.) Fall back to a direct
-            # QgsRasterLayer for vanilla QGIS / headless tests.
+            # Fall back to a direct QgsRasterLayer for vanilla QGIS / headless tests.
             try:
                 layer = iface.addRasterLayer(uri, name, "wms")
             except TypeError:
