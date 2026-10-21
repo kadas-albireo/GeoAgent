@@ -269,8 +269,8 @@ def test_openai_codex_requires_token(monkeypatch) -> None:
         resolve_model(GeoAgentConfig(provider="openai-codex"))
 
 
-def test_resolve_gemini_auto_omits_max_output_tokens(monkeypatch) -> None:
-    """Verify Gemini auto mode leaves max output tokens to the provider."""
+def test_resolve_gemini_auto_uses_model_max_output_tokens(monkeypatch) -> None:
+    """Verify Gemini auto mode sends the model's own output maximum."""
 
     class FakeGeminiModel:
         """Capture Gemini constructor arguments."""
@@ -288,6 +288,9 @@ def test_resolve_gemini_auto_omits_max_output_tokens(monkeypatch) -> None:
     )
     monkeypatch.setitem(sys.modules, "strands.models.gemini", module)
     monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setattr(
+        "geoagent.core.model.max_output_tokens", lambda provider, model: 65_536
+    )
 
     model = resolve_model(
         GeoAgentConfig(
@@ -301,7 +304,7 @@ def test_resolve_gemini_auto_omits_max_output_tokens(monkeypatch) -> None:
     assert model.kwargs == {
         "client_args": {"api_key": "test-key"},
         "model_id": "gemini-3.1-pro-preview",
-        "params": {"temperature": 0},
+        "params": {"temperature": 0, "max_output_tokens": 65_536},
     }
 
 

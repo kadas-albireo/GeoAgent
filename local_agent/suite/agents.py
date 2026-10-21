@@ -42,7 +42,7 @@ class AgentSpec:
         model: Model id for that provider.
         base_url: OpenAI-compatible base URL for ``lmstudio``/``litellm``/``vllm``/
             ``openrouter``. ``None`` uses the provider default.
-        ollama_host: Ollama base URL for the ``ollama`` / ETH-tunnel path.
+        ollama_host: Ollama base URL for the ``ollama`` provider.
         context_window: Advertised max context in tokens. ``None`` means "ask the
             backend / accept the provider default". Used by :mod:`.budget`.
         local: True for self-hosted models (cost is compute+time, billed at $0 by
@@ -80,7 +80,7 @@ DEFAULT_AGENTS: dict[str, AgentSpec] = {
         name="claude",
         provider="anthropic",
         model="claude-sonnet-4-6",
-        context_window=200_000,
+        context_window=1_000_000,  # Sonnet 4.6: 1M by default, no beta header
         local=False,
         note="Golden baseline. Bills ANTHROPIC_API_KEY. No injection: it does not need it.",
     ),

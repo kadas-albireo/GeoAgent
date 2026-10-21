@@ -10,6 +10,7 @@ import array
 import json
 import re
 import sys
+import uuid
 import tempfile
 import time
 import traceback
@@ -83,10 +84,10 @@ DEFAULT_MODELS = {
     "gemini": "gemini-3.1-pro-preview",
     "ollama": "qwen3.5:4b",
     "litellm": "openai/gpt-5.5",
-    # Deliberately blank: a zero-configuration choice where the provider resolves
-    # the model itself. lmstudio starts the LM Studio server and uses whichever
-    # model LM Studio has loaded, at its maximum context (geoagent.core.lmstudio).
-    # A hardcoded id here would be a lie for any user with a different model downloaded.
+    # Deliberately blank: lmstudio is a zero-configuration choice that starts the LM
+    # Studio server and uses whichever model it has loaded, at its maximum context
+    # (geoagent.core.lmstudio). A hardcoded id here would be a lie for any user with a
+    # different model downloaded.
     "lmstudio": "",
     "openrouter": "deepseek/deepseek-chat",
     "vllm": "",
@@ -171,6 +172,20 @@ AGENT_MODES = [
     "WhiteboxTools",
 ]
 DEFAULT_AGENT_MODE = "General QGIS"
+# Agent mode -> geoagent factory that builds its agent (worker and context view).
+FACTORY_BY_MODE = {
+    "General QGIS": "for_qgis",
+    "KADAS": "for_kadas",
+    "WhiteboxTools": "for_whitebox",
+    "NASA Earthdata": "for_nasa_earthdata",
+    "NASA OPERA": "for_nasa_opera",
+    "GEE Data Catalogs": "for_gee_data_catalogs",
+    "STAC": "for_stac",
+    "Timelapse": "for_timelapse",
+    "Vantor": "for_vantor",
+    "GeoAI": "for_geoai",
+    "HyperCoast": "for_hypercoast",
+}
 PERMISSION_PROFILES = [
     "Trusted auto-approve",
     "Inspect only",
@@ -409,6 +424,20 @@ def _setting(settings, key, default="", value_type=str):
     return settings.value(f"{SETTINGS_PREFIX}{key}", default, type=value_type)
 
 
+def _request_context(agent):
+    """Reported usage of the agent's last request plus its model's limits."""
+    return {"usage": agent.last_request_usage(), **agent.model_info()}
+
+
+def _compact_count(value):
+    """Format a token count compactly: 950, 19.5k, 1M."""
+    if value >= 1_000_000:
+        return f"{value / 1_000_000:.3g}M"
+    if value >= 1_000:
+        return f"{value / 1_000:.3g}k"
+    return str(value)
+
+
 def _max_tokens_from_settings(settings):
     """Read the optional max-token setting; blank/auto means provider default."""
     value = settings.value(f"{SETTINGS_PREFIX}max_tokens", "", type=str)
@@ -501,9 +530,9 @@ def _format_chat_worker_error(exc, provider="", agent_mode=""):
     mode_label = agent_mode or "this mode"
     is_opera_mode = "opera" in agent_mode.lower()
 
-    # Setup failures from the self-configuring providers already say exactly what to
-    # do ("run: lms get ..."). Return them verbatim, and do it *first* so the message
-    # is not buried under the generic TLS/connection advice branch below.
+    # LM Studio setup failures already say exactly what to do ("run: lms get ...").
+    # Return them verbatim, and do it *first*, before the generic connection branch
+    # below buries the instruction under advice about checking the user's proxy.
     if cls_name == "lmstudioerror":
         return raw
 
@@ -1944,6 +1973,7 @@ class ChatWorker(QThread):
         seed_history=None,
         plan_first=False,
         plan_query=None,
+        trace_ids=None,
     ):
         super().__init__(parent)
         self.iface = iface
@@ -1964,6 +1994,8 @@ class ChatWorker(QThread):
         self.agent_mode = agent_mode or DEFAULT_AGENT_MODE
         self.permission_profile = permission_profile or DEFAULT_PERMISSION_PROFILE
         self.enable_logging = bool(enable_logging)
+        # session_id/query_id stamped on every trace event (developer logging).
+        self.trace_ids = dict(trace_ids or {})
         if self.permission_profile == "Trusted auto-approve":
             self.auto_approve_tools = True
 
@@ -1985,19 +2017,7 @@ class ChatWorker(QThread):
                 model=self.model_id,
                 max_tokens=self.max_tokens,
             )
-            factory_name = {
-                "General QGIS": "for_qgis",
-                "KADAS": "for_kadas",
-                "WhiteboxTools": "for_whitebox",
-                "NASA Earthdata": "for_nasa_earthdata",
-                "NASA OPERA": "for_nasa_opera",
-                "GEE Data Catalogs": "for_gee_data_catalogs",
-                "STAC": "for_stac",
-                "Timelapse": "for_timelapse",
-                "Vantor": "for_vantor",
-                "GeoAI": "for_geoai",
-                "HyperCoast": "for_hypercoast",
-            }.get(self.agent_mode, "for_qgis")
+            factory_name = FACTORY_BY_MODE.get(self.agent_mode, "for_qgis")
             if not hasattr(geoagent, factory_name):
                 import importlib
 
@@ -2017,19 +2037,18 @@ class ChatWorker(QThread):
             if self.permission_profile:
                 kwargs["permission_profile"] = self.permission_profile
             if self.enable_logging:
-                kwargs["enable_logging"] = True
+                from geoagent.core.telemetry import AgentTracer
+
+                kwargs["tracer"] = AgentTracer(ids=self.trace_ids)
             try:
                 agent = factory(self.iface, **kwargs)
             except TypeError as exc:
                 message = str(exc)
-                if (
-                    "permission_profile" not in message
-                    and "enable_logging" not in message
-                ):
+                if "permission_profile" not in message and "tracer" not in message:
                     raise
                 # Older core factories may not accept these kwargs; retry without.
                 kwargs.pop("permission_profile", None)
-                kwargs.pop("enable_logging", None)
+                kwargs.pop("tracer", None)
                 agent = factory(self.iface, **kwargs)
             agent = _filter_tools_for_permission(agent, self.permission_profile)
             self._seed_agent_history(agent)
@@ -2076,6 +2095,7 @@ class ChatWorker(QThread):
                     "elapsed": f"{response.execution_time:.2f}s",
                     "cancelled_by_user": False,
                     "plan": self._plan_text,
+                    "context": _request_context(agent),
                 }
             )
         except Exception as exc:
@@ -2230,6 +2250,7 @@ class ChatWorker(QThread):
                 "cancelled_by_user": self.isInterruptionRequested(),
                 "streamed": True,
                 "plan": self._plan_text,
+                "context": _request_context(agent),
             }
         )
 
@@ -2581,6 +2602,10 @@ class ChatDockWidget(QDockWidget):
         self._stream_render_timer.setInterval(75)
         self._stream_render_timer.timeout.connect(self._flush_streaming_render)
         self._history_key = _project_history_key(iface)
+        # One chat session = dock open (or Clear) until Clear or KADAS/QGIS exit.
+        self._session_id = uuid.uuid4().hex
+        # (bar, label) pairs showing the last request's share of the window.
+        self._context_gauges = []
         self._jobs = []
         self._active_job_index = None
         self._run_logger = None
@@ -2593,6 +2618,7 @@ class ChatDockWidget(QDockWidget):
 
         self._setup_ui()
         self._load_settings()
+        self._update_context_gauge()
 
     def _setup_ui(self):
         """Build the chat dock widgets and signal connections."""
@@ -2870,6 +2896,10 @@ class ChatDockWidget(QDockWidget):
         primary_button_layout.addWidget(self.cancel_btn)
 
         self.clear_btn = QPushButton("Clear")
+        self.clear_btn.setToolTip(
+            "Wipe the chat and start a new session: the model starts without "
+            "earlier messages."
+        )
         self.clear_btn.clicked.connect(self._clear_transcript)
         primary_button_layout.addWidget(self.clear_btn)
 
@@ -2929,6 +2959,7 @@ class ChatDockWidget(QDockWidget):
         self.status_label.setWordWrap(True)
         self.status_label.setStyleSheet("color: gray; font-size: 10px;")
         layout.addWidget(self.status_label)
+        layout.addLayout(self._make_context_gauge())
 
     def _load_settings(self):
         """Load persisted model settings into the dock controls."""
@@ -3722,7 +3753,7 @@ class ChatDockWidget(QDockWidget):
         # relevant guidance is injected into the current message. Because history is seeded
         # from the bare transcript, the injected docs/guide never accumulate across turns.
         seed_history = self._recent_history_messages()
-        turn_prompt = self._apply_agent_guidance(prompt, prompt, agent_mode, fast)
+        turn_prompt = self._apply_agent_guidance(prompt, agent_mode, fast)
         if image_model:
             turn_prompt = (
                 f"{turn_prompt}\n\n"
@@ -3784,57 +3815,43 @@ class ChatDockWidget(QDockWidget):
             seed_history=seed_history,
             plan_first=plan_first,
             plan_query=prompt,
+            trace_ids={"session_id": self._session_id, "query_id": uuid.uuid4().hex},
         )
         self._worker.chunk_received.connect(self._on_worker_chunk)
         self._worker.finished.connect(self._on_worker_finished)
+        self._worker.finished.connect(
+            lambda result: self._update_context_gauge(result.get("context"))
+        )
         self._worker.start()
 
-    def _apply_agent_guidance(self, raw_prompt, composed_prompt, agent_mode, fast):
-        """Prepend prompt-time guidance (documancer API docs + operations guide).
+    def _apply_agent_guidance(self, composed_prompt, agent_mode, fast):
+        """Prepend the operations guide when ``upskilling`` is enabled.
 
-        Two independent, settings-gated injections, both put in the **user message** (never
-        the system prompt, which would invalidate the model's cached prefix every turn):
-
-        - ``inject_api_docs`` -> the KADAS/PyQGIS API reference matched to *raw_prompt* by
-          keyword (``geoagent.core.context_docs``). This is the "documancer": feed only the
-          slice of the API the prompt is about, so context does not blow up.
-        - ``upskilling`` -> the cohesive operations guide, sliced to the model's context
-          (``geoagent.core.operations_guide``); ``fast`` mode gets the core rules only.
+        It goes in the **user message**, never the system prompt, which would
+        invalidate the model's cached prefix every turn. The cohesive guide comes from
+        ``geoagent.core.operations_guide``; ``fast`` mode gets the core rules only.
 
         KADAS/QGIS agent modes only (the corpus is GIS-specific). Never raises: a failure
         to build guidance degrades to the plain prompt rather than breaking the turn.
         """
         if agent_mode not in ("KADAS", "General QGIS"):
             return composed_prompt
-        want_docs = _setting(self.settings, "inject_api_docs", False, bool)
-        want_upskill = _setting(self.settings, "upskilling", False, bool)
-        if not (want_docs or want_upskill):
+        if not _setting(self.settings, "upskilling", False, bool):
             return composed_prompt
 
         blocks = []
         injected = []
         try:
-            if want_upskill:
-                from geoagent.core import operations_guide
+            from geoagent.core import operations_guide
 
-                block = operations_guide.build_block(max_tokens=500 if fast else None)
-                if block:
-                    blocks.append(block)
-                    injected.append(
-                        "operations["
-                        + ",".join(
-                            operations_guide.selected_tiers(500 if fast else None)
-                        )
-                        + "]"
-                    )
-            if want_docs:
-                from geoagent.core import context_docs
-
-                block = context_docs.build_context_block(raw_prompt)
-                if block:
-                    blocks.append(block)
-                    packs = context_docs.select_packs(raw_prompt)
-                    injected.append("apidocs[" + ",".join(p.name for p in packs) + "]")
+            block = operations_guide.build_block(max_tokens=500 if fast else None)
+            if block:
+                blocks.append(block)
+                injected.append(
+                    "operations["
+                    + ",".join(operations_guide.selected_tiers(500 if fast else None))
+                    + "]"
+                )
         except Exception as exc:  # never let guidance injection break a chat turn
             QgsMessageLog.logMessage(
                 f"Guidance injection skipped: {exc}",
@@ -4597,13 +4614,76 @@ class ChatDockWidget(QDockWidget):
         self.status_label.setStyleSheet("color: green; font-size: 10px;")
 
     def _clear_transcript(self):
-        """Clear all rendered chat messages."""
+        """Clear all rendered chat messages and start a new chat session."""
         self._messages = []
+        self._session_id = uuid.uuid4().hex
         self._last_script_snippet = {}
         self.copy_script_btn.setEnabled(False)
         self.copy_md_btn.setEnabled(False)
         self.transcript.clear()
         self._save_project_history()
+        self._update_context_gauge()
+
+    def _make_context_gauge(self):
+        """Return a row with a slim context-usage bar and a tokens/window label."""
+        row = QHBoxLayout()
+        title = QLabel("Context:")
+        title.setStyleSheet("color: gray; font-size: 10px;")
+        row.addWidget(title)
+        bar = QProgressBar()
+        bar.setRange(0, 1000)
+        bar.setTextVisible(False)
+        bar.setFixedHeight(6)
+        label = QLabel("")
+        label.setStyleSheet("color: gray; font-size: 10px;")
+        row.addWidget(bar, 1)
+        row.addWidget(label)
+        self._context_gauges.append((bar, label))
+        return row
+
+    def _update_context_gauge(self, context=None):
+        """Show the last request's provider-reported tokens against the window.
+
+        Only reported numbers are shown: usage from the provider's response and
+        the window from the model map. Before any request (or after Clear) the
+        gauge is empty.
+        """
+        usage = (context or {}).get("usage")
+        if not usage:
+            for bar, label in self._context_gauges:
+                bar.setValue(0)
+                bar.setStyleSheet("")
+                label.setText("")
+                bar.setToolTip("No request yet in this session.")
+            return
+        cache_read = usage.get("cacheReadInputTokens") or 0
+        cache_write = usage.get("cacheWriteInputTokens") or 0
+        used = usage["inputTokens"] + cache_read + cache_write + usage["outputTokens"]
+        window = context.get("context_window")
+        share = used / window if window else 0.0
+        tip_lines = [
+            f"Last request, as reported by {context.get('provider')} "
+            f"({context.get('model')}):",
+            f"  Input: {usage['inputTokens']:,}",
+        ]
+        if cache_read or cache_write:
+            tip_lines.append(f"  Cache read/write: {cache_read:,} / {cache_write:,}")
+        tip_lines += [
+            f"  Output: {usage['outputTokens']:,}",
+            "Window: " + (f"{window:,} (LiteLLM model map)" if window else "unknown"),
+        ]
+        tip = "\n".join(tip_lines)
+        text = f"{_compact_count(used)} / " + (
+            _compact_count(window) if window else "?"
+        )
+        for bar, label in self._context_gauges:
+            bar.setValue(round(min(share, 1.0) * 1000))
+            bar.setStyleSheet(
+                "QProgressBar::chunk { background: #c62828; }" if share > 0.8 else ""
+            )
+            bar.setToolTip(tip)
+            label.setText(text)
+            label.setToolTip(tip)
 
     def _load_project_history(self):
         """Load persisted chat messages for the current QGIS project."""

@@ -123,7 +123,6 @@ def test_compose_prompt_noop_when_nothing_injected():
 
 def test_provision_canonical_aliases():
     assert provision._canonical("local") == "lmstudio"
-    assert provision._canonical("lms") == "lmstudio"
     with pytest.raises(ValueError):
         provision._canonical("nonsense")
 

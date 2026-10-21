@@ -21,6 +21,7 @@ from geoagent.core.prompts import DEFAULT_SYSTEM_PROMPT, FAST_SYSTEM_PROMPT
 from geoagent.core.registry import GeoToolRegistry
 from geoagent.core.result import GeoAgentResponse
 from geoagent.core.safety import ConfirmCallback, auto_approve_safe_only
+from geoagent.core.model_limits import configured_max_tokens, context_window
 from geoagent.core.telemetry import AgentTracer, TraceHookProvider
 from geoagent.tools._qt_marshal import is_qt_gui_thread, process_qt_events
 
@@ -346,8 +347,7 @@ class GeoAgent:
             cfg = cfg.model_copy(update={"provider": provider})
         if model_id is not None:
             cfg = cfg.model_copy(update={"model": model_id})
-        if fast and cfg.max_tokens is not None and cfg.max_tokens > 2048:
-            cfg = cfg.model_copy(update={"max_tokens": 2048})
+        self._max_tokens_requested = cfg.max_tokens
         self._config = cfg
         self._fast = fast
         self._qgis_safe_mode = qgis_safe_mode
@@ -375,7 +375,7 @@ class GeoAgent:
         )
         hooks: list[Any] = [hook]
         if self._tracer is not None:
-            hooks.append(TraceHookProvider(self._tracer))
+            hooks.append(TraceHookProvider(self._tracer, self.model_info()))
 
         self._strands = Agent(
             model=self._model,
@@ -385,6 +385,31 @@ class GeoAgent:
             callback_handler=None,
             tool_executor=SequentialToolExecutor() if self._qgis_safe_mode else None,
         )
+
+    def model_info(self) -> dict[str, Any]:
+        """Provider, model, context window and output-token limits of this agent."""
+        model_config = self._model.get_config() or {}
+        model_id = model_config.get("model_id") or self._config.model
+        return {
+            "provider": self._config.provider,
+            "model": model_id,
+            "context_window": context_window(self._config.provider, model_id),
+            "max_tokens_requested": self._max_tokens_requested,
+            "max_tokens_effective": configured_max_tokens(model_config),
+        }
+
+    def last_request_usage(self) -> dict[str, Any] | None:
+        """Provider-reported token usage of the most recent model request.
+
+        Strands attaches each response's usage to the assistant message it adds,
+        so the newest message carrying usage is the last request. ``None`` until
+        a request has completed (or when the provider reports no usage).
+        """
+        for message in reversed(self._strands.messages):
+            usage = (message.get("metadata") or {}).get("usage")
+            if usage:
+                return dict(usage)
+        return None
 
     @property
     def context(self) -> GeoAgentContext:

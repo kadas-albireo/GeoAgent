@@ -1069,7 +1069,7 @@ def for_kadas(
         include_external_files=True,
         external_roots=external_roots,
         include_terminal=include_terminal,
-        include_image_generation=True,
+        include_image_generation=False,
         extra_tools=extra_tools,
         fast=fast,
         permission_profile=permission_profile,

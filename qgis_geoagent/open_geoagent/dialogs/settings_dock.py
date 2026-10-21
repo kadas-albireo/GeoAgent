@@ -642,18 +642,7 @@ class SettingsDockWidget(QDockWidget):
         self.fast_check = QCheckBox("Use fast GeoAgent prompt")
         form.addRow("", self.fast_check)
 
-        # Prompt-time guidance injection (KADAS/QGIS agent modes). Independent axes:
-        # docs = the API reference matched to the prompt; upskilling = the operations guide.
-        self.inject_api_docs_check = QCheckBox(
-            "Inject API docs for the prompt (documancer)"
-        )
-        self.inject_api_docs_check.setToolTip(
-            "Prepend the KADAS/PyQGIS API reference relevant to each prompt, so the model "
-            "uses real method signatures instead of guessing. Retrieved by keyword from "
-            "the shipped doc packs."
-        )
-        form.addRow("", self.inject_api_docs_check)
-
+        # Prompt-time guidance injection (KADAS/QGIS agent modes): the operations guide.
         self.upskilling_check = QCheckBox("Apply operations guidance (upskilling)")
         self.upskilling_check.setToolTip(
             "Prepend the cohesive KADAS operations guide (which tool for which intent, "
@@ -1125,9 +1114,6 @@ class SettingsDockWidget(QDockWidget):
         self.fast_check.setChecked(
             self.settings.value(f"{SETTINGS_PREFIX}fast_mode", False, type=bool)
         )
-        self.inject_api_docs_check.setChecked(
-            self.settings.value(f"{SETTINGS_PREFIX}inject_api_docs", False, type=bool)
-        )
         self.upskilling_check.setChecked(
             self.settings.value(f"{SETTINGS_PREFIX}upskilling", False, type=bool)
         )
@@ -1213,9 +1199,6 @@ class SettingsDockWidget(QDockWidget):
         self.settings.setValue(f"{SETTINGS_PREFIX}model", self.model_input.text())
         self.settings.setValue(
             f"{SETTINGS_PREFIX}fast_mode", self.fast_check.isChecked()
-        )
-        self.settings.setValue(
-            f"{SETTINGS_PREFIX}inject_api_docs", self.inject_api_docs_check.isChecked()
         )
         self.settings.setValue(
             f"{SETTINGS_PREFIX}upskilling", self.upskilling_check.isChecked()

@@ -3,8 +3,8 @@
 Commands
 --------
 ``list``       Show the agent registry (agents.json overlaid on defaults).
-``status``     Snapshot both backends (LM Studio + ETH tunnel). Requirement #7.
-``provision``  Make a backend ready: ``provision lmstudio`` / ``provision eth``. #7.
+``status``     Snapshot the LM Studio backend. Requirement #7.
+``provision``  Make a backend ready: ``provision lmstudio``. #7.
 ``budget``     Context footprint of a prompt across agents; no model called. #4/#5/#6.
 ``run``        Sweep scenarios across agents. ``--mode plan`` (default) or ``--mode live``.
 ``report``     Aggregate live telemetry JSONL into a token/cost/latency table. #6.
@@ -88,8 +88,11 @@ def _cmd_run(args: argparse.Namespace) -> int:
         specs, scenarios, tracker_dir=tracker_dir, adapt=not args.no_adapt,
         progress=lambda m: print(f"  {m}", file=sys.stderr),
     )
-    passed = sum(1 for r in records if r.get("status") == "pass")
-    print(f"{passed}/{len(records)} advisory-pass. Telemetry in {tracker_dir or 'default log dir'}.")
+    print(f"{len(records)} queries run.")
+    from geoagent.core.telemetry import default_log_path
+
+    print(f"Trace: {default_log_path()}")
+    print(report_mod.summarize_trace(default_log_path()))
     return 0
 
 
@@ -103,6 +106,17 @@ def _cmd_report(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_trace(args: argparse.Namespace) -> int:
+    from geoagent.core.telemetry import default_log_path
+
+    path = Path(args.log) if args.log else default_log_path()
+    if not path.is_file():
+        print(f"no such log: {path}", file=sys.stderr)
+        return 1
+    print(report_mod.summarize_trace(path, None if args.run == "all" else args.run))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="python -m local_agent.suite", description=__doc__)
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -111,11 +125,11 @@ def build_parser() -> argparse.ArgumentParser:
     pl.add_argument("--json", action="store_true")
     pl.set_defaults(func=_cmd_list)
 
-    ps = sub.add_parser("status", help="snapshot LM Studio + ETH backends")
+    ps = sub.add_parser("status", help="snapshot the LM Studio backend")
     ps.set_defaults(func=_cmd_status)
 
     pp = sub.add_parser("provision", help="make a backend ready")
-    pp.add_argument("target", choices=list(provision_mod.TARGETS) + ["local", "cluster"])
+    pp.add_argument("target", choices=list(provision_mod.TARGETS) + ["local"])
     pp.add_argument("--model", default=None)
     pp.add_argument("--context", type=int, default=None)
     pp.set_defaults(func=_cmd_provision)
@@ -138,6 +152,11 @@ def build_parser() -> argparse.ArgumentParser:
     prep = sub.add_parser("report", help="aggregate live telemetry JSONL")
     prep.add_argument("logs", nargs="+")
     prep.set_defaults(func=_cmd_report)
+
+    pt = sub.add_parser("trace", help="per-agent table of a sweep from the execution log")
+    pt.add_argument("--log", default=None, help="default: ~/.kadas/agent_execution.log")
+    pt.add_argument("--run", default="latest", help="run_id, 'latest', or 'all'")
+    pt.set_defaults(func=_cmd_trace)
 
     return p
 

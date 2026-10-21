@@ -8,6 +8,16 @@ import types
 from typing import Any
 
 
+class _GeoAgentStub:
+    """The GeoAgent methods the worker reads after a turn."""
+
+    def last_request_usage(self):
+        return None
+
+    def model_info(self):
+        return {}
+
+
 def _install_fake_geoagent(monkeypatch, captured):
     """Install a fake geoagent module for plugin worker wiring tests."""
 
@@ -65,7 +75,7 @@ def test_chat_worker_uses_whitebox_factory(monkeypatch) -> None:
         cancelled_tools: list = []
         execution_time = 0.0
 
-    class _StubAgent:
+    class _StubAgent(_GeoAgentStub):
         def chat(self, prompt: str) -> _StubResponse:
             captured["prompt"] = prompt
             return _StubResponse()
@@ -115,7 +125,7 @@ def test_chat_worker_streams_when_enabled(monkeypatch) -> None:
 
     captured: dict[str, Any] = {}
 
-    class _StubAgent:
+    class _StubAgent(_GeoAgentStub):
         async def stream_chat(self, prompt: str):
             captured["prompt"] = prompt
             yield {"data": "he"}
@@ -175,7 +185,7 @@ def test_chat_worker_routes_agent_modes(monkeypatch) -> None:
         cancelled_tools: list = []
         execution_time = 0.0
 
-    class _StubAgent:
+    class _StubAgent(_GeoAgentStub):
         def chat(self, prompt: str) -> _StubResponse:
             captured["prompt"] = prompt
             return _StubResponse()
@@ -221,7 +231,7 @@ def test_chat_worker_uses_stac_factory(monkeypatch) -> None:
         cancelled_tools: list = []
         execution_time = 0.0
 
-    class _StubAgent:
+    class _StubAgent(_GeoAgentStub):
         def chat(self, prompt: str) -> _StubResponse:
             captured["prompt"] = prompt
             return _StubResponse()
@@ -269,7 +279,7 @@ def test_chat_worker_uses_vantor_factory(monkeypatch) -> None:
         cancelled_tools: list = []
         execution_time = 0.0
 
-    class _StubAgent:
+    class _StubAgent(_GeoAgentStub):
         def chat(self, prompt: str) -> _StubResponse:
             captured["prompt"] = prompt
             return _StubResponse()
@@ -316,7 +326,7 @@ def test_chat_worker_uses_geoai_factory(monkeypatch) -> None:
         cancelled_tools: list = []
         execution_time = 0.0
 
-    class _StubAgent:
+    class _StubAgent(_GeoAgentStub):
         def chat(self, prompt: str) -> _StubResponse:
             captured["prompt"] = prompt
             return _StubResponse()

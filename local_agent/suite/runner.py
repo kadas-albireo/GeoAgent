@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -80,6 +81,9 @@ def compose_prompt(spec: AgentSpec, prompt: str) -> tuple[str, dict[str, Any]]:
             + plan.api_docs_tokens + plan.prompt_tokens
         )
         budget_tok = budget_mod.upskill_budget(plan.usable, base)
+        if spec.fast:
+            # Mirror the dock (chat_dock._apply_agent_guidance): fast gets 500 tokens.
+            budget_tok = min(budget_tok, 500)
         frag = budget_mod.upskill_block(prompt, budget_tok)
         if frag:
             meta["upskill"] = True
@@ -162,6 +166,12 @@ def run_live(
 
     Requires the backend to be reachable (``suite provision``). Per-record failures are
     captured, not raised, so one dead agent does not abort the sweep.
+
+    Every run is also traced into the agent execution log (``~/.kadas`` unless
+    ``$GEOAGENT_LOG_DIR``): one ``session_id`` per agent in this sweep, one
+    ``query_id`` per scenario, the agent name as ``config`` and a closing ``turn``
+    record (``success`` = finished without an error, as in the plugin's run log),
+    so sweeps appear on the context dashboard.
     """
     from geoagent.testing import MockQGISIface, MockQGISProject
     from local_agent.telemetry.tracker import BenchmarkTracker
@@ -172,6 +182,7 @@ def run_live(
             progress(msg)
 
     records: list[dict[str, Any]] = []
+    run_id = uuid.uuid4().hex
     for spec in specs:
         used = spec
         if adapt:
@@ -181,11 +192,13 @@ def run_live(
             if changes:
                 say(f"{spec.name}: adapted ({'; '.join(changes)})")
         tracker = BenchmarkTracker(
-            agent_name=spec.name, model_id=used.model, log_dir=tracker_dir
+            agent_name=spec.name, model_id=used.model, directory=tracker_dir
         )
+        trace_ids = {"source": "suite", "run_id": run_id, "session_id": uuid.uuid4().hex, "config": spec.name}
         for sc in scenarios:
             say(f"{spec.name} · {sc.get('id')}")
-            records.append(_run_one_live(used, sc, tracker, evaluators, MockQGISIface, MockQGISProject))
+            ids = {**trace_ids, "query_id": uuid.uuid4().hex, "benchmark_id": sc.get("id", "?")}
+            records.append(_run_one_live(used, sc, tracker, evaluators, MockQGISIface, MockQGISProject, ids))
     return records
 
 
@@ -196,12 +209,30 @@ def _run_one_live(
     evaluators: Any,
     MockIface: Any,
     MockProject: Any,
+    trace_ids: dict[str, str],
 ) -> dict[str, Any]:
     from geoagent.core import factory
+    from geoagent.core.telemetry import AgentTracer
 
     prompt = sc["prompt"]
     composed, inj = compose_prompt(spec, prompt)
+    tracer = AgentTracer(ids=trace_ids)
     started = time.perf_counter()
+
+    def close_turn(tool_names: list[str], error: str = "") -> None:
+        # Same shape as the plugin's RunLogger "turn" record, which the dashboard reads.
+        tracer.record(
+            "turn",
+            prompt=prompt,
+            provider=spec.provider,
+            model=spec.model,
+            mode="KADAS",
+            success=not error,
+            elapsed=time.perf_counter() - started,
+            executed_tools=", ".join(tool_names),
+            error=error,
+        )
+
     try:
         agent = factory.for_kadas(
             MockIface(),
@@ -209,7 +240,7 @@ def _run_one_live(
             config=build_config(spec),
             fast=spec.fast,
             confirm=lambda *_a, **_k: True,
-            enable_logging=False,
+            tracer=tracer,
         )
         turn_prompt = composed
         if spec.plan:
@@ -236,6 +267,7 @@ def _run_one_live(
         check = evaluators.evaluate(
             sc.get("eval_criteria", {}), answer=answer, tool_calls=tool_calls
         )
+        close_turn([c["name"] for c in tool_calls])
         return tracker.record(
             test_id=sc.get("id", "?"),
             difficulty=sc.get("difficulty", "?"),
@@ -251,6 +283,7 @@ def _run_one_live(
         )
     except Exception as exc:
         latency_ms = (time.perf_counter() - started) * 1000
+        close_turn([], f"{type(exc).__name__}: {exc}")
         return tracker.record(
             test_id=sc.get("id", "?"),
             difficulty=sc.get("difficulty", "?"),

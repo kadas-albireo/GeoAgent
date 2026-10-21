@@ -1,7 +1,7 @@
 # RUNBOOK — running the GeoAgent test harness
 
-How to run the full evaluation under each guidance condition. Everything here uses one CLI
-(`python -m local_agent.suite`) plus the LM Studio backend manager
+How to run the full evaluation under each backend and each guidance condition. Everything
+here uses one CLI (`python -m local_agent.suite`) plus the LM Studio backend manager
 (`geoagent.core.lmstudio`).
 
 All Python must run under the QGIS venv (it has `strands`):
@@ -98,4 +98,5 @@ $PY -m local_agent.suite provision lmstudio         # bring the backend up
 $PY -m local_agent.suite run --mode plan            # fit + cost sweep, no model
 $PY -m local_agent.suite run --mode live --out DIR  # real sweep on mock KADAS
 $PY -m local_agent.suite report DIR/*.log           # token/cost/latency/pass table
+
 ```

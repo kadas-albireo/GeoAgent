@@ -12,6 +12,7 @@ dependency on rich/tabulate. Standard library only.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -113,3 +114,78 @@ def summarize_live(paths: list[Path]) -> str:
         else "\n\nNo priced records (all local, or model not in cost table)."
     )
     return base + cost_line
+
+
+# -- agent execution trace ---------------------------------------------------
+
+
+def summarize_trace(log_path: Path, run_id: str | None = "latest") -> str:
+    """Per-agent table of one suite sweep, read from the agent execution log.
+
+    ``run_id="latest"`` picks the most recent sweep in the log; ``None`` takes
+    every suite record. Token columns are the provider's real counts from
+    ``model_call`` records; ``first``/``peak`` are input tokens of the first and
+    largest request in a query, averaged over queries.
+    """
+    records = []
+    with Path(log_path).open(encoding="utf-8") as handle:
+        for line in handle:
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if rec.get("source") == "suite":
+                records.append(rec)
+    if run_id == "latest" and records:
+        run_id = records[-1].get("run_id")
+    if run_id:
+        records = [r for r in records if r.get("run_id") == run_id]
+    if not records:
+        return "no suite records in the log."
+
+    queries: dict[str, dict[str, Any]] = {}
+    for rec in records:
+        q = queries.setdefault(
+            rec["query_id"], {"config": rec.get("config", "?"), "calls": [], "turn": None}
+        )
+        if rec.get("kind") == "model_call":
+            q["calls"].append(rec)
+        elif rec.get("kind") == "turn":
+            q["turn"] = rec
+
+    def mean(values: list[float]) -> float:
+        return sum(values) / len(values) if values else 0.0
+
+    by_config: dict[str, list[dict[str, Any]]] = {}
+    for q in queries.values():
+        by_config.setdefault(q["config"], []).append(q)
+
+    rows = []
+    for config, qs in by_config.items():
+        errors = sum(1 for q in qs if q["turn"] and not q["turn"].get("success"))
+        with_calls = [q for q in qs if q["calls"]]
+
+        def inputs(q: dict[str, Any]) -> list[int]:
+            return [(c.get("usage") or {}).get("inputTokens") or 0 for c in q["calls"]]
+
+        first = [q["calls"][0].get("context_chars") or {} for q in with_calls]
+        rows.append(
+            [
+                config,
+                str(len(qs)),
+                str(errors),
+                f"{mean([len(q['calls']) for q in with_calls]):.1f}",
+                f"{mean([inputs(q)[0] for q in with_calls]):,.0f}",
+                f"{mean([max(inputs(q)) for q in with_calls]):,.0f}",
+                f"{mean([sum(inputs(q)) for q in with_calls]):,.0f}",
+                f"{mean([sum((c.get('usage') or {}).get('outputTokens') or 0 for c in q['calls']) for q in with_calls]):,.0f}",
+                f"{mean([f.get('system_prompt', 0) for f in first]):,.0f}",
+                f"{mean([f.get('tool_specs', 0) for f in first]):,.0f}",
+                f"{mean([f.get('messages', 0) for f in first]):,.0f}",
+            ]
+        )
+    headers = [
+        "config", "queries", "errors", "req/q", "first in", "peak in", "billed in/q",
+        "out/q", "sys chars", "tool chars", "msg chars (1st)",
+    ]
+    return f"run {run_id}\n" + _table(headers, rows)

@@ -6,6 +6,7 @@ import os
 from typing import Any
 
 from geoagent.core.config import GeoAgentConfig, ProviderName
+from geoagent.core.model_limits import max_output_tokens
 
 
 def _openai_token_params(model_id: str, max_tokens: int | None) -> dict[str, int]:
@@ -64,6 +65,13 @@ def resolve_model(config: GeoAgentConfig | None = None, **overrides: Any) -> Any
         else GeoAgentConfig(**overrides)
     )
     provider: ProviderName = cfg.provider
+    if cfg.max_tokens is None:
+        # "Auto" means the model's own output maximum when it is known. A high
+        # max_tokens costs nothing extra: providers bill and rate-limit the tokens
+        # actually generated. Unknown models keep the provider default.
+        cfg = cfg.model_copy(
+            update={"max_tokens": max_output_tokens(provider, cfg.model)}
+        )
     if provider == "bedrock":
         from strands.models.bedrock import BedrockModel
 
@@ -135,15 +143,18 @@ def resolve_model(config: GeoAgentConfig | None = None, **overrides: Any) -> Any
         from strands.models.anthropic import AnthropicModel
 
         model_id = cfg.model or os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-6")
-        client_args = dict(cfg.client_args)
-        kwargs: dict[str, Any] = {}
-        if cfg.max_tokens is not None:
-            kwargs["max_tokens"] = int(cfg.max_tokens)
+        # The Anthropic API requires max_tokens; there is no provider default.
+        max_tokens = cfg.max_tokens or max_output_tokens(provider, model_id)
+        if max_tokens is None:
+            raise ValueError(
+                f"Unknown output limit for Anthropic model {model_id!r}: "
+                "set Max tokens in Settings."
+            )
         return AnthropicModel(
-            client_args=client_args or None,
+            client_args=dict(cfg.client_args) or None,
             model_id=model_id,
+            max_tokens=int(max_tokens),
             params={"temperature": cfg.temperature},
-            **kwargs,
         )
 
     if provider == "gemini":

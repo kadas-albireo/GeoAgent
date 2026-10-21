@@ -5,9 +5,28 @@
       "name": "claude",
       "provider": "anthropic",
       "model": "claude-sonnet-4-6",
-      "context_window": 200000,
+      "context_window": 1000000,
       "local": false,
       "note": "Golden baseline. Bills ANTHROPIC_API_KEY. No injection."
+    },
+    {
+      "name": "claude-kadas",
+      "provider": "anthropic",
+      "model": "claude-sonnet-4-6",
+      "context_window": 1000000,
+      "local": false,
+      "note": "Sonnet as the KADAS dock runs it: full tools + operations guide. Context-reduction baseline.",
+      "upskill": true
+    },
+    {
+      "name": "claude-kadas-fast",
+      "provider": "anthropic",
+      "model": "claude-sonnet-4-6",
+      "context_window": 1000000,
+      "local": false,
+      "note": "claude-kadas in Fast mode (compact tools, 500-token guide, max_tokens clamped to 2048).",
+      "upskill": true,
+      "fast": true
     },
     {
       "name": "local-raw",
@@ -58,6 +77,18 @@
       "local": true,
       "plan": true,
       "note": "+ plan-first reasoning. Isolates the planning pass."
+    },
+    {
+      "name": "local-plan-both",
+      "provider": "lmstudio",
+      "model": "qwen2.5-7b-instruct",
+      "base_url": "http://localhost:1234/v1",
+      "context_window": 32768,
+      "local": true,
+      "api_docs": true,
+      "upskill": true,
+      "plan": true,
+      "note": "+ docs + upskilling + plan-first. The full small-model stack."
     }
   ]
 }

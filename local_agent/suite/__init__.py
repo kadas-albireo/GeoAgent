@@ -3,8 +3,8 @@
 One package that ties together the pieces that used to live scattered across
 ``local_agent/`` and ``geoagent/core/``:
 
-- :mod:`.agents`     — declarative multi-agent registry (Claude / LM Studio / ETH / …).
-- :mod:`.provision`  — make a backend ready (start LM Studio, bring up the ETH tunnel).
+- :mod:`.agents`     — declarative multi-agent registry (Claude / LM Studio / …).
+- :mod:`.provision`  — make a backend ready (start LM Studio).
 - :mod:`.budget`     — adapt the tool surface + doc injection to a model's context window.
 - :mod:`.cost`       — token → USD estimation (prices are unverified priors; see the file).
 - :mod:`.runner`     — run a scenario across agents, **headless** (mock hosts) or in KADAS.

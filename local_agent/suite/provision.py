@@ -1,19 +1,19 @@
 """Make a backend ready with one call — the CLI-underneath for requirement #7.
 
 Requirement #7 wants "things from LM Studio spun up from the UI (some command line
-underneath)". The command line underneath already exists as two idempotent entry points in
-the shipped package; this module is the thin unifying wrapper the suite CLI and, later, the
-dock button call:
+underneath)". The command line underneath already exists as an idempotent entry point in
+the shipped package; this module is the thin wrapper the suite CLI and, later, the dock
+button call:
 
     - LM Studio: ``geoagent.core.lmstudio.ensure_model`` — starts the server, loads the
       model at a context large enough for the KADAS tool schemas, returns a config.
 
-``ensure_model`` takes a ``progress`` callback, so a Qt dock can show status without this module
+It takes a ``progress`` callback, so a Qt dock can show status without this module
 knowing anything about Qt. That is the whole "UI → CLI underneath" contract: the UI passes
 a callback, we drive the same code the CLI drives.
 
 Import-safe: no network at import; every path degrades to a clear error when the backend
-(``lms`` CLI, ssh) is absent.
+(``lms`` CLI) is absent.
 """
 
 from __future__ import annotations
@@ -45,14 +45,14 @@ def provision(
         ValueError: unknown target.
         LMStudioError: backend not ready and not auto-fixable (see the error text).
     """
-    _canonical(target)  # validates; only lmstudio is supported
+    _canonical(target)
     from geoagent.core.lmstudio import ensure_model
 
     return ensure_model(model, context_length=context_length, progress=progress)
 
 
 def status() -> dict[str, Any]:
-    """Return a snapshot of the backend, for ``suite status`` or a dock status line.
+    """Return a snapshot of the backends, for ``suite status`` or a dock status line.
 
     Never raises: a backend that is not installed reports ``available: False`` rather than
     blowing up the whole status call.
