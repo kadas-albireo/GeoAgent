@@ -926,3 +926,52 @@ def test_run_processing_profile_allows_hypercoast_tools() -> None:
 
     assert not _permission_allows_tool("Inspect only", "load_hypercoast_rgb", _Meta())
     assert _permission_allows_tool("Run processing", "load_hypercoast_rgb", _Meta())
+
+
+def test_compact_count():
+    from open_geoagent.dialogs.chat_dock import _compact_count
+
+    assert _compact_count(950) == "950"
+    assert _compact_count(19_545) == "19.5k"
+    assert _compact_count(1_000_000) == "1M"
+
+
+class _Gauge:
+    def __init__(self):
+        self.value, self.text, self.tip = None, None, None
+
+    def setValue(self, value):
+        self.value = value
+
+    def setStyleSheet(self, _sheet):
+        pass
+
+    def setToolTip(self, tip):
+        self.tip = tip
+
+    def setText(self, text):
+        self.text = text
+
+
+def test_context_gauge_shows_reported_usage_only():
+    from open_geoagent.dialogs.chat_dock import ChatDockWidget
+
+    bar, label = _Gauge(), _Gauge()
+    dock = type("FakeDock", (), {})()
+    dock._context_gauges = [(bar, label)]
+
+    ChatDockWidget._update_context_gauge(
+        dock,
+        {
+            "usage": {"inputTokens": 19_000, "outputTokens": 1_000},
+            "context_window": 1_000_000,
+            "provider": "anthropic",
+            "model": "claude-sonnet-4-6",
+        },
+    )
+    assert label.text == "20k / 1M"
+    assert bar.value == 20  # 2.0% of a 0..1000 bar
+    assert "Input: 19,000" in bar.tip
+
+    ChatDockWidget._update_context_gauge(dock, None)  # Clear / no request yet
+    assert (bar.value, label.text) == (0, "")

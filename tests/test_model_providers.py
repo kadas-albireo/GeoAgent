@@ -269,8 +269,8 @@ def test_openai_codex_requires_token(monkeypatch) -> None:
         resolve_model(GeoAgentConfig(provider="openai-codex"))
 
 
-def test_resolve_gemini_auto_omits_max_output_tokens(monkeypatch) -> None:
-    """Verify Gemini auto mode leaves max output tokens to the provider."""
+def test_resolve_gemini_auto_uses_model_max_output_tokens(monkeypatch) -> None:
+    """Verify Gemini auto mode sends the model's own output maximum."""
 
     class FakeGeminiModel:
         """Capture Gemini constructor arguments."""
@@ -288,6 +288,9 @@ def test_resolve_gemini_auto_omits_max_output_tokens(monkeypatch) -> None:
     )
     monkeypatch.setitem(sys.modules, "strands.models.gemini", module)
     monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setattr(
+        "geoagent.core.model.max_output_tokens", lambda provider, model: 65_536
+    )
 
     model = resolve_model(
         GeoAgentConfig(
@@ -301,7 +304,7 @@ def test_resolve_gemini_auto_omits_max_output_tokens(monkeypatch) -> None:
     assert model.kwargs == {
         "client_args": {"api_key": "test-key"},
         "model_id": "gemini-3.1-pro-preview",
-        "params": {"temperature": 0},
+        "params": {"temperature": 0, "max_output_tokens": 65_536},
     }
 
 
@@ -459,3 +462,58 @@ def test_resolve_vllm_requires_model_id(monkeypatch) -> None:
 
     with pytest.raises(ValueError, match="vLLM provider requires a model id"):
         resolve_model(GeoAgentConfig(provider="vllm"))
+
+
+def test_resolve_apertus_model(monkeypatch) -> None:
+    """Verify Apertus resolves through the OpenAI-compatible ApertusModel."""
+    fake_model = _install_fake_openai_model(monkeypatch)
+    monkeypatch.delitem(sys.modules, "geoagent.core.apertus", raising=False)
+    monkeypatch.setenv("APERTUS_API_KEY", "test-key")
+    monkeypatch.delenv("APERTUS_BASE_URL", raising=False)
+
+    model = resolve_model(GeoAgentConfig(provider="apertus", max_tokens=1024))
+
+    assert isinstance(model, fake_model)
+    assert model.kwargs == {
+        "client_args": {
+            "api_key": "test-key",
+            "base_url": "https://api.publicai.co/v1",
+        },
+        "model_id": "swiss-ai/apertus-v1.5-70b",
+        "params": {"temperature": 0.0, "max_tokens": 1024},
+    }
+
+
+def test_resolve_apertus_requires_api_key(monkeypatch) -> None:
+    """Verify Apertus reports a clear error without an API key."""
+    _install_fake_openai_model(monkeypatch)
+    monkeypatch.delitem(sys.modules, "geoagent.core.apertus", raising=False)
+    monkeypatch.delenv("APERTUS_API_KEY", raising=False)
+
+    with pytest.raises(ValueError, match="Apertus provider requires an API key"):
+        resolve_model(GeoAgentConfig(provider="apertus"))
+
+
+def test_apertus_replays_empty_tool_arguments_as_placeholder(monkeypatch) -> None:
+    """Verify argument-less tool calls are rewritten; others are untouched."""
+    pytest.importorskip("strands.models.openai")
+    # Earlier tests may have cached geoagent.core.apertus against a fake OpenAIModel.
+    monkeypatch.delitem(sys.modules, "geoagent.core.apertus", raising=False)
+    from geoagent.core.apertus import EMPTY_ARGUMENTS, ApertusModel
+
+    model = ApertusModel(client_args={"api_key": "k"}, model_id="m")
+    messages = [
+        {"role": "user", "content": [{"text": "hi"}]},
+        {
+            "role": "assistant",
+            "content": [
+                {"toolUse": {"toolUseId": "a", "name": "list_layers", "input": {}}},
+                {"toolUse": {"toolUseId": "b", "name": "zoom", "input": {"x": 1}}},
+            ],
+        },
+    ]
+
+    request = model.format_request(messages)
+
+    calls = request["messages"][-1]["tool_calls"]
+    assert [c["function"]["arguments"] for c in calls] == [EMPTY_ARGUMENTS, '{"x": 1}']

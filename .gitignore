@@ -127,3 +127,7 @@ local_agent/runs/
 local_agent/fast-agent.secrets.yaml
 *.secrets.yaml
 .fast-agent/
+APERTUS_API_KEY.*
+
+# Build output
+dist/

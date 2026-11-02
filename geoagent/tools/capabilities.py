@@ -258,7 +258,7 @@ def capability_tools(iface: Any = None, project: Optional[Any] = None) -> list[A
 
         return QgsProject.instance()
 
-    @geo_tool(category="capabilities", available_in=("full", "fast"))
+    @geo_tool(category="capabilities", available_in=("full",))
     def list_qgis_capabilities() -> dict[str, Any]:
         """Discover the tools KADAS/QGIS currently exposes at runtime.
 
@@ -325,7 +325,7 @@ def capability_tools(iface: Any = None, project: Optional[Any] = None) -> list[A
 
         return _on_gui(_run)
 
-    @geo_tool(category="capabilities", available_in=("full", "fast"))
+    @geo_tool(category="capabilities", available_in=("full",))
     def list_processing_algorithms(
         filter_text: str = "", provider: str = ""
     ) -> dict[str, Any]:
@@ -388,7 +388,7 @@ def capability_tools(iface: Any = None, project: Optional[Any] = None) -> list[A
 
         return _on_gui(_run)
 
-    @geo_tool(category="capabilities", available_in=("full", "fast"))
+    @geo_tool(category="capabilities", available_in=("full",))
     def describe_processing_algorithm(algorithm_id: str) -> dict[str, Any]:
         """Describe a Processing algorithm's parameters and outputs.
 
@@ -458,7 +458,7 @@ def capability_tools(iface: Any = None, project: Optional[Any] = None) -> list[A
 
         return _on_gui(_run)
 
-    @geo_tool(category="capabilities", available_in=("full", "fast"))
+    @geo_tool(category="capabilities", available_in=("full",))
     def list_plugins(active_only: bool = False) -> dict[str, Any]:
         """List installed KADAS/QGIS plugins with metadata.
 
@@ -506,7 +506,7 @@ def capability_tools(iface: Any = None, project: Optional[Any] = None) -> list[A
 
         return _on_gui(_run)
 
-    @geo_tool(category="capabilities", available_in=("full", "fast"))
+    @geo_tool(category="capabilities", available_in=("full",))
     def describe_plugin(name: str) -> dict[str, Any]:
         """Describe a plugin: metadata, its commands, and how to run them.
 
@@ -575,7 +575,7 @@ def capability_tools(iface: Any = None, project: Optional[Any] = None) -> list[A
 
         return _on_gui(_run)
 
-    @geo_tool(category="capabilities", available_in=("full", "fast"))
+    @geo_tool(category="capabilities", available_in=("full",))
     def list_kadas_actions(
         filter_text: str = "", enabled_only: bool = False
     ) -> dict[str, Any]:
@@ -1070,7 +1070,7 @@ def capability_tools(iface: Any = None, project: Optional[Any] = None) -> list[A
 
         return _on_gui(_run)
 
-    @geo_tool(category="capabilities", available_in=("full", "fast"))
+    @geo_tool(category="capabilities", available_in=("full",))
     def query_agent_logs(
         kind: str = "all", contains: str = "", limit: int = 50
     ) -> dict[str, Any]:

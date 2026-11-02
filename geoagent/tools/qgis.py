@@ -1133,8 +1133,7 @@ def qgis_tools(iface: Any, project: Optional[Any] = None) -> list[Any]:
             # same kApp->addRasterLayer a manual geocatalog click runs), which is
             # what actually renders the layer on the KADAS canvas. A layer added
             # via a bare QgsProject.addMapLayer is valid but stays blank in KADAS.
-            # (load_geoadmin_layer already loads this way.) Fall back to a direct
-            # QgsRasterLayer for vanilla QGIS / headless tests.
+            # Fall back to a direct QgsRasterLayer for vanilla QGIS / headless tests.
             try:
                 layer = iface.addRasterLayer(uri, name, "wms")
             except TypeError:
@@ -1280,7 +1279,12 @@ def qgis_tools(iface: Any, project: Optional[Any] = None) -> list[Any]:
         raster_min: Optional[float] = None,
         raster_max: Optional[float] = None,
     ) -> dict[str, Any]:
-        """Change simple layer symbology such as color and line width.
+        """Restyle a vector OR raster layer (colour, width, opacity, colour ramp).
+
+        Works on **both** layer types -- do not tell the user raster symbology is
+        unsupported. For a raster, pass ``raster_palette`` (and optionally
+        ``raster_min``/``raster_max``) to apply a single-band pseudocolour ramp;
+        ``opacity`` applies to either type.
 
         Args:
             layer_name: Display name of the target QGIS layer.

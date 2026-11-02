@@ -54,9 +54,10 @@ that follow the same convention work without any GeoAgent change.
 ## 3. Generate the API reference; never hand-write signatures
 
 `local_agent/docs/gen_kadas_docs.py` generates `geoagent/docs/kadas-*.md` from
-KADAS' SIP bindings, and `core/context_docs.py` retrieves the relevant slice into
-the prompt tail at question time. Regenerating after a KADAS bump is a build step,
-not a code change, and the agent gets real signatures instead of guesses.
+KADAS' SIP bindings, and `core/context_docs.py` retrieves the relevant slice for a
+question. The plugins no longer inject it (it inflated every request's context); the
+local benchmark suite's `api_docs` agents still use it. Regenerating after a KADAS
+bump is a build step, not a code change.
 
 **Make this a CI job**: regenerate on every KADAS bump and fail the build if the
 diff touches a symbol GeoAgent binds. That converts silent drift into a red build.

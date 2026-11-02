@@ -140,8 +140,15 @@ def _utc_isoformat(epoch: float) -> str:
 class AgentTracer:
     """Append-only JSONL sink for LLM-mode execution traces."""
 
-    def __init__(self, *, log_path: str | os.PathLike[str] | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        log_path: str | os.PathLike[str] | None = None,
+        ids: dict[str, str] | None = None,
+    ) -> None:
+        """``ids`` (e.g. ``session_id``/``query_id``) are stamped on every event."""
         self._log_path = Path(log_path) if log_path is not None else default_log_path()
+        self._ids = dict(ids or {})
         self._lock = threading.Lock()
 
     @property
@@ -151,7 +158,7 @@ class AgentTracer:
 
     def record(self, kind: str, **data: Any) -> None:
         """Append one event to the log (best-effort, never raises into a turn)."""
-        event = {"kind": kind, "time": time.time(), **data}
+        event = {"kind": kind, "time": time.time(), **self._ids, **data}
         try:
             line = json.dumps(event, default=str, ensure_ascii=False)
             with self._lock:
@@ -190,13 +197,23 @@ class AgentTracer:
         self.record("tool_call", name=name, input=tool_input)
 
     def log_tool_result(
-        self, name: str, result: Any, exception: str | None = None
+        self,
+        name: str,
+        result: Any,
+        exception: str | None = None,
+        duration_s: float | None = None,
     ) -> None:
         """Record a tool's return value (or the exception it raised)."""
         data: dict[str, Any] = {"name": name, "result": result}
         if exception:
             data["exception"] = exception
+        if duration_s is not None:
+            data["duration_s"] = duration_s
         self.record("tool_result", **data)
+
+    def log_model_call(self, **data: Any) -> None:
+        """Record one model request: provider token usage + what filled the context."""
+        self.record("model_call", **data)
 
     def log_turn_end(self, answer: Any, *, stop_reason: str = "") -> None:
         """Record the final answer and stop reason that close a turn."""
@@ -222,19 +239,34 @@ class TraceHookProvider:
     * ``BeforeToolCallEvent``   -> ``tool_call`` (name + exact input args, i.e.
       the code/command the agent runs)
     * ``AfterToolCallEvent``    -> ``tool_result`` (the tool's return value)
+    * ``AfterModelCallEvent``   -> ``model_call`` (per-request token usage,
+      stop reason, the character size of system prompt, tool schemas and
+      history sent, plus the static ``run_info`` given at construction)
     * ``AfterInvocationEvent``  -> ``turn_end`` (final answer + stop reason)
     """
 
-    def __init__(self, tracer: AgentTracer) -> None:
+    def __init__(
+        self, tracer: AgentTracer, run_info: dict[str, Any] | None = None
+    ) -> None:
         self._tracer = tracer
+        # Static per-agent facts (provider, model, token limits) for model_call.
+        self._run_info = dict(run_info or {})
+        self._projected_input_tokens: int | None = None
+        # 1-based count of model requests made through this agent. The plugin
+        # builds a fresh agent per query, so there it numbers requests per query.
+        self._request_index = 0
+        self._model_started: float | None = None
+        self._tool_started: dict[str, float] = {}
 
     def register_hooks(self, registry: Any, **kwargs: Any) -> None:  # noqa: ARG002
         """Subscribe to the Strands lifecycle hooks that build the trace."""
         from strands.hooks import (
             AfterInvocationEvent,
+            AfterModelCallEvent,
             AfterToolCallEvent,
             AgentInitializedEvent,
             BeforeInvocationEvent,
+            BeforeModelCallEvent,
             BeforeToolCallEvent,
             MessageAddedEvent,
         )
@@ -244,6 +276,8 @@ class TraceHookProvider:
         registry.add_callback(MessageAddedEvent, self._on_message)
         registry.add_callback(BeforeToolCallEvent, self._before_tool)
         registry.add_callback(AfterToolCallEvent, self._after_tool)
+        registry.add_callback(BeforeModelCallEvent, self._before_model)
+        registry.add_callback(AfterModelCallEvent, self._after_model)
         registry.add_callback(AfterInvocationEvent, self._on_turn_end)
 
     def _on_init(self, event: Any) -> None:
@@ -292,6 +326,7 @@ class TraceHookProvider:
         """Record the tool call: its name and exact input arguments."""
         try:
             use = event.tool_use
+            self._tool_started[str(use.get("toolUseId", ""))] = time.monotonic()
             self._tracer.log_tool_call(str(use.get("name", "")), use.get("input"))
         except Exception:
             pass
@@ -301,10 +336,52 @@ class TraceHookProvider:
         try:
             use = event.tool_use
             exc = getattr(event, "exception", None)
+            started = self._tool_started.pop(str(use.get("toolUseId", "")), None)
             self._tracer.log_tool_result(
                 str(use.get("name", "")),
                 getattr(event, "result", None),
                 exception=str(exc) if exc is not None else None,
+                duration_s=time.monotonic() - started if started else None,
+            )
+        except Exception:
+            pass
+
+    def _before_model(self, event: Any) -> None:
+        """Keep Strands' input-token estimate to compare with the real usage."""
+        self._projected_input_tokens = getattr(event, "projected_input_tokens", None)
+        self._model_started = time.monotonic()
+
+    def _after_model(self, event: Any) -> None:
+        """Record the request's token usage and the size of each context part.
+
+        ``agent.messages`` does not yet contain the response here, so it is
+        exactly the history that was sent with this request.
+        """
+        try:
+            response = event.stop_response
+            if response is None:
+                return
+            agent = event.agent
+            self._request_index += 1
+            self._tracer.log_model_call(
+                **self._run_info,
+                request_index=self._request_index,
+                latency_s=(
+                    time.monotonic() - self._model_started
+                    if self._model_started
+                    else None
+                ),
+                stop_reason=str(response.stop_reason),
+                usage=(response.message.get("metadata") or {}).get("usage"),
+                projected_input_tokens=self._projected_input_tokens,
+                context_chars={
+                    "system_prompt": len(str(agent.system_prompt or "")),
+                    "tool_specs": len(
+                        json.dumps(agent.tool_registry.get_all_tool_specs())
+                    ),
+                    "messages": len(json.dumps(agent.messages, default=str)),
+                    "message_count": len(agent.messages),
+                },
             )
         except Exception:
             pass

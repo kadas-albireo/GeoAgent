@@ -10,13 +10,20 @@ OpenGeoAgent dock widgets, wiring them to the KADAS interface through
 import os
 
 from qgis.PyQt.QtCore import QObject, Qt
-from qgis.PyQt.QtGui import QAction, QIcon
+from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import QMessageBox
+
+# QAction moved from QtWidgets (Qt5, Kadas 2) to QtGui (Qt6, Kadas 3). Import it
+# from wherever this KADAS build keeps it so the plugin loads on both.
+try:
+    from qgis.PyQt.QtGui import QAction
+except ImportError:  # pragma: no cover - depends on the host Qt version
+    from qgis.PyQt.QtWidgets import QAction
 
 from kadas.kadasgui import KadasPluginInterface
 
 from .kadas_iface_adapter import KadasIfaceAdapter
-from ._shared import ensure_open_geoagent_importable
+from ._shared import ensure_open_geoagent_importable, has_kadas_annotation_support
 
 PLUGIN_DIR = os.path.dirname(__file__)
 
@@ -61,7 +68,17 @@ class KadasGeoAgent(QObject):
     # -- Lifecycle -------------------------------------------------------
 
     def initGui(self):
-        """Create KADAS ribbon entries for the chat and settings panels."""
+        """Create KADAS ribbon entries for the chat and settings panels.
+
+        The annotation tools adapt to either the Kadas-2 (KadasItemLayer) or
+        Kadas-3 (QgsAnnotationLayer) API at runtime, so the plugin loads on both.
+        It only bows out on a build that has neither annotation API, which in
+        practice means it is not running inside KADAS at all.
+        """
+        if not has_kadas_annotation_support():
+            self._warn_unsupported_kadas()
+            return
+
         chat_icon = self._icon("icon.svg")
         settings_icon = self._icon("settings.svg")
 
@@ -85,6 +102,21 @@ class KadasGeoAgent(QObject):
             self.kadas_iface.PLUGIN_MENU,
             self.kadas_iface.MAPS_TAB,
         )
+
+    def _warn_unsupported_kadas(self):
+        """Tell the user why the plugin did not load, in both places they look."""
+        message = (
+            "KADAS GeoAgent could not find a KADAS annotation API (neither the "
+            "Kadas-2 KadasItemLayer nor the Kadas-3 QgsAnnotationLayer classes "
+            "are available). The plugin has not been loaded."
+        )
+        try:
+            self.kadas_iface.messageBar().pushCritical("KADAS GeoAgent", message)
+        except Exception:
+            # A message bar is not guaranteed this early in plugin start-up.
+            pass
+        # The message bar is transient, so also leave it on stderr for support.
+        print(f"[kadas_geoagent] {message}")
 
     def unload(self):
         """Remove docks and ribbon actions."""
@@ -181,9 +213,14 @@ class KadasGeoAgent(QObject):
         KadasPluginInterface does not expose ``addDockWidget``; the KADAS main
         window is a QMainWindow, so we add the dock to it directly.
         """
-        self.kadas_iface.mainWindow().addDockWidget(
-            Qt.DockWidgetArea.RightDockWidgetArea, dock
+        # Scoped enums (Qt.DockWidgetArea.RightDockWidgetArea) are the Qt6 form;
+        # older PyQt5 (Kadas 2) may only expose the unscoped Qt.RightDockWidgetArea.
+        right_area = getattr(
+            getattr(Qt, "DockWidgetArea", Qt), "RightDockWidgetArea", None
         )
+        if right_area is None:
+            right_area = Qt.RightDockWidgetArea
+        self.kadas_iface.mainWindow().addDockWidget(right_area, dock)
 
     def _remove_dock(self, dock):
         """Remove a dock from the KADAS main window and delete it."""

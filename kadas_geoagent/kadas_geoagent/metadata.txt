@@ -8,12 +8,19 @@ about=KADAS GeoAgent brings the GeoAgent QGIS tool surface into a dockable
     OpenGeoAgent chat/settings dock widgets, adapting the KADAS plugin
     interface to the QGIS iface surface GeoAgent expects.
 
+    Works on both KADAS generations. The annotation tools detect the running
+    KADAS at load time and use the matching API: the QgsAnnotationLayer-based
+    API on KADAS 3 (the Qt6 builds from 2026-06-23 onward) and the older
+    KadasItemLayer API on the KADAS 2 release line (up to and including v2.3.20,
+    Qt5).
+
     Requirements:
+    - KADAS Albireo 2.x or 3.x
     - GeoAgent and provider clients, installable from Settings > Dependencies
     - The shared OpenGeoAgent dock package (open_geoagent) importable on the
       KADAS Python path
-    - KADAS Albireo 2 with Python 3.11 or newer
-version=0.1.1
+    - KADAS Albireo with Python 3.10 or newer
+version=0.3.0
 author=OpenGIS
 email=aloha@opengis.ch
 
@@ -29,9 +36,22 @@ experimental=True
 deprecated=False
 
 changelog=
-    0.1.1 - Locked-down Windows dependency install
-        - Fall back to "pip --target" via the base interpreter when Group
-          Policy (AppLocker/SRP) blocks executing the venv python (WinError 1260)
+    0.3.0 - Offline-capable data access and context budget
+        - Catalog and place search run through KADAS' own configured catalogs
+          and locator (works with the offline search service, proxy and auth)
+        - Output-token budget resolved per model instead of a fixed constant
+        - Added the Apertus provider (Swiss AI, via PublicAI)
+        - GPX waypoints/routes, SVG markers and annotation tooltips
+        - Keeps KADAS 2 + 3 support and the locked-down Windows install
+    0.2.1 - Install dependencies on locked-down Windows
+        - Fall back to a plain "pip --target" install driven by the base
+          interpreter when Group Policy (AppLocker/SRP) blocks executing the
+          virtual environment's python.exe (WinError 1260)
+    0.2.0 - Support both KADAS 2 and KADAS 3
+        - Annotation tools detect the running KADAS and use the matching API
+          (KadasItemLayer on 2.x, QgsAnnotationLayer on 3.x)
+        - Plugin loads on the KADAS 2 release line instead of refusing
+        - Import QAction from the correct module for Qt5 and Qt6
     0.1.0 - Initial KADAS GeoAgent port
         - Added KadasPluginInterface -> QGIS iface adapter
         - Added KADAS ribbon registration for chat and settings docks

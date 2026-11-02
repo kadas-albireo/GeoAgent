@@ -81,7 +81,12 @@ if [ "$BUILD_WHEEL" = true ]; then
     [ -x "$c" ] && { PY="$c"; break; }
   done
   [ -n "$PY" ] || die "no python found to build the wheel"
-  "$PY" -m pip wheel --no-deps --wheel-dir "$PKG/open_geoagent/bundled" "$REPO_ROOT" \
+  # Build from a copy of the tracked files only: building in the repo reuses a
+  # stale build/lib (shipping modules deleted since) and picks up untracked files.
+  WHEEL_SRC="$STAGE/wheel_src"
+  mkdir -p "$WHEEL_SRC"
+  ( cd "$REPO_ROOT" && git ls-files -z | tar --null -T - -cf - ) | tar -xf - -C "$WHEEL_SRC"
+  "$PY" -m pip wheel --no-deps --wheel-dir "$PKG/open_geoagent/bundled" "$WHEEL_SRC" \
     >/dev/null 2>&1 || die "wheel build failed (try: $PY -m pip install build wheel)"
   WHEEL=$(ls "$PKG/open_geoagent/bundled"/*.whl 2>/dev/null | head -1)
   [ -n "$WHEEL" ] || die "no wheel produced"

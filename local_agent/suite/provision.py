@@ -1,9 +1,9 @@
 """Make a backend ready with one call — the CLI-underneath for requirement #7.
 
 Requirement #7 wants "things from LM Studio spun up from the UI (some command line
-underneath)". The command line underneath already exists as two idempotent entry points in
-the shipped package; this module is the thin unifying wrapper the suite CLI and, later, the
-dock button call:
+underneath)". The command line underneath already exists as an idempotent entry point in
+the shipped package; this module is the thin wrapper the suite CLI and, later, the dock
+button call:
 
     - LM Studio: ``geoagent.core.lmstudio.ensure_model`` — starts the server, loads the
       model at a context large enough for the KADAS tool schemas, returns a config.
@@ -13,7 +13,7 @@ knowing anything about Qt. That is the whole "UI → CLI underneath" contract: t
 a callback, we drive the same code the CLI drives.
 
 Import-safe: no network at import; every path degrades to a clear error when the backend
-(``lms`` CLI, ssh) is absent.
+(``lms`` CLI) is absent.
 """
 
 from __future__ import annotations
