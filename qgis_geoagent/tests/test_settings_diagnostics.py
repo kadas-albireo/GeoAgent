@@ -56,6 +56,8 @@ def test_collect_diagnostics_redacts_credentials(monkeypatch, tmp_path) -> None:
             f"{SETTINGS_PREFIX}openai_project_id": "proj-secret",
             f"{SETTINGS_PREFIX}openrouter_api_key": "openrouter-secret",
             f"{SETTINGS_PREFIX}openrouter_base_url": "https://openrouter.example/v1",
+            f"{SETTINGS_PREFIX}requesty_api_key": "requesty-secret",
+            f"{SETTINGS_PREFIX}requesty_base_url": "https://requesty.example/v1",
             f"{SETTINGS_PREFIX}vllm_api_key": "vllm-secret",
             f"{SETTINGS_PREFIX}vllm_base_url": "https://vllm.example.test/v1",
         }
@@ -70,6 +72,8 @@ def test_collect_diagnostics_redacts_credentials(monkeypatch, tmp_path) -> None:
     assert diagnostics["credential_presence"]["openai_project_id"]["saved"] is True
     assert diagnostics["credential_presence"]["openrouter_api_key"]["saved"] is True
     assert diagnostics["credential_presence"]["openrouter_base_url"]["saved"] is True
+    assert diagnostics["credential_presence"]["requesty_api_key"]["saved"] is True
+    assert diagnostics["credential_presence"]["requesty_base_url"]["saved"] is True
     assert diagnostics["credential_presence"]["vllm_api_key"]["saved"] is True
     assert diagnostics["credential_presence"]["vllm_base_url"]["saved"] is True
     assert diagnostics["model"]["provider"] == "openai"
@@ -81,6 +85,8 @@ def test_collect_diagnostics_redacts_credentials(monkeypatch, tmp_path) -> None:
     assert "proj-secret" not in text
     assert "openrouter-secret" not in text
     assert "https://openrouter.example/v1" not in text
+    assert "requesty-secret" not in text
+    assert "https://requesty.example/v1" not in text
     assert "vllm-secret" not in text
     assert "https://vllm.example.test/v1" not in text
 
@@ -123,11 +129,60 @@ def test_settings_environment_sets_openrouter_values(monkeypatch) -> None:
     assert os.environ["OPENROUTER_API_KEY"] == "test-key"
 
 
-def test_core_provider_dependencies_include_vllm() -> None:
-    """Verify Core Providers installs the vLLM client."""
+def test_settings_environment_sets_requesty_values(monkeypatch) -> None:
+    """Verify settings apply Requesty environment variables."""
+    import os
+
+    monkeypatch.delenv("REQUESTY_BASE_URL", raising=False)
+    monkeypatch.delenv("REQUESTY_API_KEY", raising=False)
+    settings = _FakeSettings(
+        {
+            f"{SETTINGS_PREFIX}requesty_base_url": "https://requesty.test/v1",
+            f"{SETTINGS_PREFIX}requesty_api_key": "test-key",
+        }
+    )
+
+    _apply_environment_from_settings(settings)
+
+    assert os.environ["REQUESTY_BASE_URL"] == "https://requesty.test/v1"
+    assert os.environ["REQUESTY_API_KEY"] == "test-key"
+
+
+def test_settings_environment_sets_openai_compatible_values(monkeypatch) -> None:
+    """Verify settings apply generic OpenAI-compatible environment variables."""
+    import os
+
+    monkeypatch.delenv("OPENAI_COMPATIBLE_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_COMPATIBLE_API_KEY", raising=False)
+    settings = _FakeSettings(
+        {
+            f"{SETTINGS_PREFIX}openai_compatible_base_url": "http://localhost:8000/v1",
+            f"{SETTINGS_PREFIX}openai_compatible_api_key": "test-key",
+        }
+    )
+
+    _apply_environment_from_settings(settings)
+
+    assert os.environ["OPENAI_COMPATIBLE_BASE_URL"] == "http://localhost:8000/v1"
+    assert os.environ["OPENAI_COMPATIBLE_API_KEY"] == "test-key"
+
+
+def test_core_provider_dependencies_exclude_vllm() -> None:
+    """Verify Core Providers omits the vLLM client.
+
+    ``strands-vllm`` pins ``openai<2.0``, which cannot coexist with the
+    ``openai>=2.0`` the default openai-codex provider requires.
+    """
     from open_geoagent.deps_manager import REQUIRED_PACKAGES
 
-    assert ("strands_vllm", "strands-vllm") in REQUIRED_PACKAGES
+    assert ("strands_vllm", "strands-vllm") not in REQUIRED_PACKAGES
+
+
+def test_core_provider_dependencies_require_openai_2() -> None:
+    """Verify the plugin installs an openai release with the Responses API."""
+    from open_geoagent.deps_manager import REQUIRED_PACKAGES
+
+    assert ("openai", "openai>=2.0") in REQUIRED_PACKAGES
 
 
 def test_uv_usable_requires_successful_verification(monkeypatch) -> None:
@@ -432,7 +487,7 @@ def test_install_packages_falls_back_to_pip_when_uv_install_fails(
 
     success, message = deps_manager.install_packages(
         venv_dir,
-        ["GeoAgent[providers]>=1.8.0"],
+        ["GeoAgent[providers]>=1.9.1"],
         progress_callback=lambda p, m: progress.append((p, m)),
     )
 

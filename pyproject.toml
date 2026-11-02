@@ -1,6 +1,6 @@
 [project]
 name = "GeoAgent"
-version = "1.8.3"
+version = "1.9.1"
 description = "Centralized AI agent framework for Open Geospatial Python packages and QGIS plugins (Strands Agents)"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -40,17 +40,24 @@ dependencies = [
 geoagent = "geoagent.cli:main"
 
 [project.optional-dependencies]
-openai = ["openai>=1.0"]
+openai = ["openai>=2.0"]
 anthropic = ["anthropic>=0.40"]
 gemini = ["strands-agents[gemini]>=1.37", "google-genai>=1.0"]
 ollama = ["ollama>=0.3"]
 litellm = ["strands-agents[litellm]>=1.37"]
-openrouter = ["openai>=1.0"]
+openrouter = ["openai>=2.0"]
+requesty = ["openai>=2.0"]
+openai-compatible = ["openai>=2.0"]
+# strands-vllm pins openai<2.0, which conflicts with the openai>=2.0 needed by
+# the default openai-codex provider, so this extra is not part of `providers`
+# or `all`. The `vllm` provider works without it (it falls back to the stock
+# OpenAI model at the server's /v1 URL); install this extra only for
+# strands-vllm-specific features, in an environment without openai>=2.0.
 vllm = ["strands-vllm"]
 bedrock = []
 leafmap = ["leafmap>=0.43"]
 anymap = ["anymap"]
-geoai = ["geoai"]
+geoai = ["geoai-py"]
 geemap = ["geemap"]
 earthengine = ["earthengine-api>=1.0", "geemap"]
 stac = ["pystac-client>=0.8", "planetary-computer>=1.0"]
@@ -61,7 +68,9 @@ hsae = ["hydrosovereign>=6.0.7"]
 ui = ["solara>=1.35", "starlette<2.0"]
 browser = ["fastapi>=0.115", "uvicorn[standard]>=0.30"]
 qgis = []
-providers = ["GeoAgent[openai,anthropic,gemini,ollama,litellm,openrouter,vllm]"]
+providers = [
+    "GeoAgent[openai,anthropic,gemini,ollama,litellm,openrouter,requesty,openai-compatible]",
+]
 all = [
     "GeoAgent[providers,leafmap,anymap,geoai,geemap,earthengine,stac,earthdata,nasa-opera,whitebox,ui,browser]",
 ]
@@ -89,7 +98,7 @@ geoagent = ["docs/*.md", "core/*.md"]
 universal = true
 
 [tool.bumpversion]
-current_version = "1.8.3"
+current_version = "1.9.1"
 commit = true
 tag = true
 

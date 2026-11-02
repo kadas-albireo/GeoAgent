@@ -91,6 +91,8 @@ DEFAULT_MODELS = {
     "lmstudio": "",
     "openrouter": "deepseek/deepseek-chat",
     "apertus": "swiss-ai/apertus-v1.5-70b",
+    "requesty": "openai/gpt-4o-mini",
+    "openai-compatible": "",
     "vllm": "",
 }
 PROVIDERS = [
@@ -103,7 +105,9 @@ PROVIDERS = [
     "ollama",
     "openai",
     "openai-codex",
+    "openai-compatible",
     "openrouter",
+    "requesty",
     "vllm",
 ]
 # Providers that need no API key and resolve their own model, so the UI can say so
@@ -478,6 +482,11 @@ def _max_tokens_to_display(value):
 
 def _apply_environment_from_settings(settings):
     """Apply provider credentials from QSettings to the current QGIS process."""
+    # The settings and chat docks keep separate QSettings instances.
+    sync = getattr(settings, "sync", None)
+    if callable(sync):
+        sync()
+
     # Mapping of QSettings key names to environment variable names. The strings
     # are identifiers, not credentials; the actual values are read from QSettings
     # at runtime. ``# pragma: allowlist secret`` silences detect-secrets keyword
@@ -497,6 +506,10 @@ def _apply_environment_from_settings(settings):
         "openrouter_base_url": "OPENROUTER_BASE_URL",
         "apertus_api_key": "APERTUS_API_KEY",  # pragma: allowlist secret
         "apertus_base_url": "APERTUS_BASE_URL",
+        "requesty_api_key": "REQUESTY_API_KEY",  # pragma: allowlist secret
+        "requesty_base_url": "REQUESTY_BASE_URL",
+        "openai_compatible_api_key": "OPENAI_COMPATIBLE_API_KEY",  # pragma: allowlist secret
+        "openai_compatible_base_url": "OPENAI_COMPATIBLE_BASE_URL",
         "vllm_api_key": "VLLM_API_KEY",  # pragma: allowlist secret
         "vllm_base_url": "VLLM_BASE_URL",
     }
