@@ -98,7 +98,20 @@ def resolve_model(config: GeoAgentConfig | None = None, **overrides: Any) -> Any
         )
 
     if provider == "openai-codex":
-        from strands.models.openai_responses import OpenAIResponsesModel
+        try:
+            from strands.models.openai_responses import OpenAIResponsesModel
+        except ImportError as exc:
+            raise ImportError(
+                "The openai-codex provider could not import the OpenAI Responses "
+                "API model from strands. This usually means the installed openai "
+                "package is too old, because the Responses API requires the "
+                "openai package version 2.0 or newer. Upgrade with `pip install "
+                "-U 'GeoAgent[openai]'` (or `pip install -U 'openai>=2'`) and "
+                "restart QGIS or your Python session. To stay on openai 1.x, "
+                "switch the provider to 'openai', which uses the Chat Completions "
+                "API instead. If openai 2.x is already installed, the original "
+                f"error below has the real cause. Original error: {exc}"
+            ) from exc
 
         model_id = cfg.model or os.environ.get("OPENAI_CODEX_MODEL", "gpt-5.5")
         client_args = dict(cfg.client_args)
@@ -314,6 +327,75 @@ def resolve_model(config: GeoAgentConfig | None = None, **overrides: Any) -> Any
         params = {"temperature": cfg.temperature}
         params.update(_token_param("max_tokens", cfg.max_tokens))
         return ApertusModel(client_args=client_args, model_id=model_id, params=params)
+    if provider == "requesty":
+        from strands.models.openai import OpenAIModel
+
+        model_id = cfg.model or os.environ.get("REQUESTY_MODEL", "openai/gpt-4o-mini")
+        client_args = dict(cfg.client_args)
+        api_key = client_args.get("api_key") or os.environ.get("REQUESTY_API_KEY")
+        if not api_key:
+            raise ValueError(
+                "Requesty provider requires an API key. Set REQUESTY_API_KEY "
+                "or pass client_args={'api_key': ...}."
+            )
+        client_args["api_key"] = api_key
+        base_url = (
+            client_args.get("base_url")
+            or cfg.requesty_base_url
+            or os.environ.get("REQUESTY_BASE_URL")
+            or "https://router.requesty.ai/v1"
+        )
+        client_args["base_url"] = base_url
+        params = _token_param("max_tokens", cfg.max_tokens)
+        if not _model_uses_default_temperature_only(model_id):
+            params["temperature"] = cfg.temperature
+        return OpenAIModel(
+            client_args=client_args,
+            model_id=model_id,
+            params=params,
+        )
+
+    if provider == "openai-compatible":
+        from strands.models.openai import OpenAIModel
+
+        client_args = dict(cfg.client_args)
+        base_url = (
+            client_args.get("base_url")
+            or cfg.openai_compatible_base_url
+            or os.environ.get("OPENAI_COMPATIBLE_BASE_URL")
+        )
+        if not base_url:
+            raise ValueError(
+                "The openai-compatible provider requires the base URL of an "
+                "OpenAI-compatible server, for example http://localhost:8000/v1. "
+                "Set OPENAI_COMPATIBLE_BASE_URL, pass "
+                "openai_compatible_base_url=..., or configure it in OpenGeoAgent "
+                "Settings."
+            )
+        model_id = cfg.model or os.environ.get("OPENAI_COMPATIBLE_MODEL")
+        if not model_id:
+            raise ValueError(
+                "The openai-compatible provider requires a model id, because a "
+                "generic endpoint has no default. Pass model=..., set "
+                "OPENAI_COMPATIBLE_MODEL, or configure the model in OpenGeoAgent "
+                "Settings."
+            )
+        client_args["base_url"] = base_url
+        # Local servers usually ignore the key, but the OpenAI SDK rejects an
+        # empty one, so fall back to the same placeholder the vLLM path uses.
+        client_args["api_key"] = (
+            client_args.get("api_key")
+            or os.environ.get("OPENAI_COMPATIBLE_API_KEY")
+            or "EMPTY"
+        )
+        params = _token_param("max_tokens", cfg.max_tokens)
+        if not _model_uses_default_temperature_only(model_id):
+            params["temperature"] = cfg.temperature
+        return OpenAIModel(
+            client_args=client_args,
+            model_id=model_id,
+            params=params,
+        )
 
     if provider == "vllm":
         from strands_vllm import VLLMModel

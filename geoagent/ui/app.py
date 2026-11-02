@@ -23,6 +23,8 @@ PROVIDER_NAMES: tuple[str, ...] = (
     "litellm",
     "openrouter",
     "apertus",
+    "requesty",
+    "openai-compatible",
     "ollama",
     "vllm",
 )
@@ -36,6 +38,8 @@ DEFAULT_MODEL_BY_PROVIDER: dict[str, str] = {
     "litellm": "openai/gpt-5.5",
     "openrouter": "deepseek/deepseek-chat",
     "apertus": "swiss-ai/apertus-v1.5-70b",
+    "requesty": "openai/gpt-4o-mini",
+    "openai-compatible": "",
     "ollama": "qwen3.5:4b",
     "vllm": "",
 }

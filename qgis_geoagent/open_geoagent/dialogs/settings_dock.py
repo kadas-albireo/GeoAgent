@@ -79,6 +79,10 @@ ENV_FALLBACKS = {
     "openrouter_base_url": ("OPENROUTER_BASE_URL",),
     "apertus_api_key": ("APERTUS_API_KEY",),
     "apertus_base_url": ("APERTUS_BASE_URL",),
+    "requesty_api_key": ("REQUESTY_API_KEY",),
+    "requesty_base_url": ("REQUESTY_BASE_URL",),
+    "openai_compatible_api_key": ("OPENAI_COMPATIBLE_API_KEY",),
+    "openai_compatible_base_url": ("OPENAI_COMPATIBLE_BASE_URL",),
     "vllm_api_key": ("VLLM_API_KEY",),
     "vllm_base_url": ("VLLM_BASE_URL",),
 }
@@ -104,6 +108,10 @@ _ACCENT_BUTTON_STYLE = (
 
 def _apply_environment_from_settings(settings):
     """Apply saved provider credentials to the current process."""
+    sync = getattr(settings, "sync", None)
+    if callable(sync):
+        sync()
+
     for key, env_names in ENV_FALLBACKS.items():
         value = settings.value(f"{SETTINGS_PREFIX}{key}", "", type=str).strip()
         if not value:
@@ -455,6 +463,37 @@ class SettingsDockWidget(QDockWidget):
         self._apply_opaque_background()
         self.topLevelChanged.connect(self._on_top_level_changed)
 
+    def showEvent(self, event):
+        """Keep restored floating geometry inside the current screen."""
+        super().showEvent(event)
+        QTimer.singleShot(0, self._fit_floating_dock_to_screen)
+
+    def _fit_floating_dock_to_screen(self):
+        """Shrink and reposition an oversized floating settings dock."""
+        if not self.isFloating():
+            return
+
+        screen = self.screen() or QGuiApplication.primaryScreen()
+        if screen is None:
+            return
+
+        available = screen.availableGeometry().adjusted(8, 8, -8, -8)
+        frame = self.frameGeometry()
+        client = self.geometry()
+        frame_width = max(0, frame.width() - client.width())
+        frame_height = max(0, frame.height() - client.height())
+        width = min(self.width(), max(0, available.width() - frame_width))
+        height = min(self.height(), max(0, available.height() - frame_height))
+        if (width, height) != (self.width(), self.height()):
+            self.resize(width, height)
+
+        frame = self.frameGeometry()
+        x = min(max(frame.x(), available.left()), available.right() - frame.width() + 1)
+        y = min(
+            max(frame.y(), available.top()), available.bottom() - frame.height() + 1
+        )
+        self.move(x, y)
+
     def _setup_ui(self):
         """Build the settings dock widgets and tabs."""
         main_widget = QWidget()
@@ -484,10 +523,10 @@ class SettingsDockWidget(QDockWidget):
         # Wrap each page in a scroll area so long content (the Model tab in
         # particular) is fully reachable in a narrow docked panel instead of
         # being clipped at the bottom.
-        self.tab_widget.addTab(
-            self._wrap_in_scroll(self._create_dependencies_tab()), "Dependencies"
-        )
-        self.tab_widget.addTab(self._wrap_in_scroll(self._create_model_tab()), "Model")
+        self.dependencies_scroll = self._wrap_in_scroll(self._create_dependencies_tab())
+        self.model_scroll = self._wrap_in_scroll(self._create_model_tab())
+        self.tab_widget.addTab(self.dependencies_scroll, "Dependencies")
+        self.tab_widget.addTab(self.model_scroll, "Model")
 
         button_layout = QHBoxLayout()
         self.save_btn = QPushButton("Save Settings")
@@ -725,6 +764,30 @@ class SettingsDockWidget(QDockWidget):
         self.apertus_base_url_input = QLineEdit()
         self.apertus_base_url_input.setPlaceholderText("https://api.publicai.co/v1")
         credentials_form.addRow("Apertus base URL:", self.apertus_base_url_input)
+        self.requesty_key_input = QLineEdit()
+        self.requesty_key_input.setEchoMode(password_mode)
+        credentials_form.addRow("Requesty API key:", self.requesty_key_input)
+
+        self.requesty_base_url_input = QLineEdit()
+        self.requesty_base_url_input.setPlaceholderText("https://router.requesty.ai/v1")
+        credentials_form.addRow("Requesty base URL:", self.requesty_base_url_input)
+
+        self.openai_compatible_key_input = QLineEdit()
+        self.openai_compatible_key_input.setEchoMode(password_mode)
+        self.openai_compatible_key_input.setPlaceholderText(
+            "Optional; often unused by local servers"
+        )
+        credentials_form.addRow(
+            "OpenAI-compatible API key:", self.openai_compatible_key_input
+        )
+
+        self.openai_compatible_base_url_input = QLineEdit()
+        self.openai_compatible_base_url_input.setPlaceholderText(
+            "http://localhost:8000/v1"
+        )
+        credentials_form.addRow(
+            "OpenAI-compatible base URL:", self.openai_compatible_base_url_input
+        )
 
         self.vllm_key_input = QLineEdit()
         self.vllm_key_input.setEchoMode(password_mode)
@@ -969,7 +1032,7 @@ class SettingsDockWidget(QDockWidget):
                 self,
                 "Installation Failed",
                 f"Failed to install dependencies:\n\n{message}\n\n"
-                'Manual fallback: pip install "GeoAgent[providers]>=1.8.0"',
+                'Manual fallback: pip install "GeoAgent[providers]>=1.9.1"',
             )
 
         self._deps_worker = None
@@ -1178,6 +1241,10 @@ class SettingsDockWidget(QDockWidget):
             ("openrouter_base_url", self.openrouter_base_url_input),
             ("apertus_api_key", self.apertus_key_input),
             ("apertus_base_url", self.apertus_base_url_input),
+            ("requesty_api_key", self.requesty_key_input),
+            ("requesty_base_url", self.requesty_base_url_input),
+            ("openai_compatible_api_key", self.openai_compatible_key_input),
+            ("openai_compatible_base_url", self.openai_compatible_base_url_input),
             ("vllm_api_key", self.vllm_key_input),
             ("vllm_base_url", self.vllm_base_url_input),
         )
@@ -1245,6 +1312,7 @@ class SettingsDockWidget(QDockWidget):
                 # secret to QSettings.
                 continue
             self.settings.setValue(f"{SETTINGS_PREFIX}{key}", current)
+        _apply_environment_from_settings(self.settings)
         self.status_label.setText("Settings saved")
         self.status_label.setStyleSheet("color: green; font-size: 10px;")
         self.iface.messageBar().pushSuccess("OpenGeoAgent", "Settings saved.")
@@ -1356,6 +1424,10 @@ class SettingsDockWidget(QDockWidget):
             "openrouter_base_url",
             "apertus_api_key",
             "apertus_base_url",
+            "requesty_api_key",
+            "requesty_base_url",
+            "openai_compatible_api_key",
+            "openai_compatible_base_url",
             "vllm_api_key",
             "vllm_base_url",
             *OAUTH_CONFIG_KEYS,

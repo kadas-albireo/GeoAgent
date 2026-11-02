@@ -18,6 +18,8 @@ ProviderName = Literal[
     "litellm",
     "lmstudio",
     "openrouter",
+    "requesty",
+    "openai-compatible",
     "vllm",
 ]
 
@@ -38,12 +40,16 @@ def _default_provider_from_env() -> ProviderName:
         return "openrouter"
     if os.environ.get("APERTUS_API_KEY"):
         return "apertus"
+    if os.environ.get("REQUESTY_API_KEY"):
+        return "requesty"
     if (
         os.environ.get("LITELLM_API_KEY")
         or os.environ.get("LITELLM_MODEL")
         or os.environ.get("LITELLM_BASE_URL")
     ):
         return "litellm"
+    if os.environ.get("OPENAI_COMPATIBLE_BASE_URL"):
+        return "openai-compatible"
     if os.environ.get("VLLM_BASE_URL") or os.environ.get("VLLM_MODEL_ID"):
         return "vllm"
     if os.environ.get("OLLAMA_HOST") or os.environ.get("USE_OLLAMA") == "1":
@@ -59,6 +65,9 @@ class GeoAgentConfig(BaseModel):
     ``OPENAI_CODEX_ACCESS_TOKEN``,
     ``GEMINI_API_KEY`` / ``GOOGLE_API_KEY``, ``LITELLM_API_KEY``,
     ``OPENROUTER_API_KEY``, ``APERTUS_API_KEY`` / ``APERTUS_BASE_URL``,
+    ``REQUESTY_API_KEY``,
+    ``OPENAI_COMPATIBLE_BASE_URL`` / ``OPENAI_COMPATIBLE_API_KEY`` /
+    ``OPENAI_COMPATIBLE_MODEL``,
     ``VLLM_BASE_URL`` / ``VLLM_MODEL_ID``,
     ``AWS_REGION`` / default AWS credential chain for Bedrock, etc.).
 
@@ -77,6 +86,9 @@ class GeoAgentConfig(BaseModel):
             here while talking to a host over there.
         openrouter_base_url: OpenRouter OpenAI-compatible API base URL.
         apertus_base_url: OpenAI-compatible base URL serving Apertus.
+        requesty_base_url: Requesty OpenAI-compatible API base URL.
+        openai_compatible_base_url: Base URL of any OpenAI-compatible server,
+            for example ``http://localhost:8000/v1``.
         vllm_base_url: vLLM OpenAI-compatible API base URL.
     """
 
@@ -108,6 +120,14 @@ class GeoAgentConfig(BaseModel):
     apertus_base_url: Optional[str] = Field(
         default=None,
         description="OpenAI-compatible base URL serving Apertus.",
+    )
+    requesty_base_url: Optional[str] = Field(
+        default=None,
+        description="Requesty OpenAI-compatible API base URL.",
+    )
+    openai_compatible_base_url: Optional[str] = Field(
+        default=None,
+        description="Base URL of any OpenAI-compatible server.",
     )
     vllm_base_url: Optional[str] = Field(
         default=None,
