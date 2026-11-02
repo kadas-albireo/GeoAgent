@@ -398,8 +398,6 @@ def resolve_model(config: GeoAgentConfig | None = None, **overrides: Any) -> Any
         )
 
     if provider == "vllm":
-        from strands_vllm import VLLMModel
-
         model_id = cfg.model or os.environ.get("VLLM_MODEL_ID")
         if not model_id:
             raise ValueError(
@@ -418,6 +416,19 @@ def resolve_model(config: GeoAgentConfig | None = None, **overrides: Any) -> Any
         )
         params = {"temperature": cfg.temperature}
         params.update(_token_param("max_tokens", cfg.max_tokens))
+        try:
+            from strands_vllm import VLLMModel
+        except ImportError:
+            # strands-vllm pins openai<2.0, so it is not in the default install
+            # (openai>=2.0 is required). vLLM serves the OpenAI Chat Completions
+            # API at /v1, so the stock OpenAI model reaches it just as well.
+            from strands.models.openai import OpenAIModel
+
+            return OpenAIModel(
+                client_args={**client_args, "base_url": base_url, "api_key": api_key},
+                model_id=model_id,
+                params=params,
+            )
         return VLLMModel(
             base_url=base_url,
             model_id=model_id,

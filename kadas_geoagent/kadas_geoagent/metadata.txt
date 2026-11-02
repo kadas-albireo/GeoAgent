@@ -20,7 +20,7 @@ about=KADAS GeoAgent brings the GeoAgent QGIS tool surface into a dockable
     - The shared OpenGeoAgent dock package (open_geoagent) importable on the
       KADAS Python path
     - KADAS Albireo with Python 3.10 or newer
-version=0.3.0
+version=0.3.1
 author=OpenGIS
 email=aloha@opengis.ch
 
@@ -36,6 +36,12 @@ experimental=True
 deprecated=False
 
 changelog=
+    0.3.1 - Sync with upstream GeoAgent 1.9.1
+        - Requesty and generic OpenAI-compatible providers alongside Apertus
+        - openai>=2.0; the vLLM provider no longer needs strands-vllm
+        - Provider credentials stay in sync between the chat and settings docks
+        - A popped-out settings panel is kept inside the screen
+
     0.3.0 - Offline-capable data access and context budget
         - Catalog and place search run through KADAS' own configured catalogs
           and locator (works with the offline search service, proxy and auth)

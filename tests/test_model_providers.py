@@ -463,6 +463,26 @@ def test_resolve_vllm_model(monkeypatch) -> None:
     }
 
 
+def test_resolve_vllm_falls_back_to_openai_model(monkeypatch) -> None:
+    """Without strands-vllm (it pins openai<2), vLLM resolves via OpenAIModel."""
+    fake_model = _install_fake_openai_model(monkeypatch)
+    # A None entry makes ``import strands_vllm`` raise ImportError.
+    monkeypatch.setitem(sys.modules, "strands_vllm", None)
+    monkeypatch.delenv("VLLM_API_KEY", raising=False)
+    monkeypatch.setenv("VLLM_BASE_URL", "http://gpu-box:8000/v1")
+
+    model = resolve_model(
+        GeoAgentConfig(provider="vllm", model="Qwen/Qwen3-4B", max_tokens=1024)
+    )
+
+    assert isinstance(model, fake_model)
+    assert model.kwargs == {
+        "client_args": {"base_url": "http://gpu-box:8000/v1", "api_key": "EMPTY"},
+        "model_id": "Qwen/Qwen3-4B",
+        "params": {"temperature": 0.0, "max_tokens": 1024},
+    }
+
+
 def test_resolve_vllm_requires_model_id(monkeypatch) -> None:
     """Verify vLLM reports a clear error without a model id."""
 
@@ -564,8 +584,6 @@ def test_requesty_can_be_selected_from_environment(monkeypatch) -> None:
     monkeypatch.setenv("REQUESTY_API_KEY", "test-key")
 
     assert GeoAgentConfig().provider == "requesty"
-
-
 
 
 def test_resolve_requesty_model(monkeypatch) -> None:

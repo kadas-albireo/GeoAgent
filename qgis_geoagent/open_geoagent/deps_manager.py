@@ -53,8 +53,9 @@ PROVIDER_PACKAGES = [
 ]
 # strands-vllm is deliberately absent: it pins openai<2.0, which cannot resolve
 # against the openai>=2.0 that GeoAgent[providers] and the default openai-codex
-# provider require, so including it here breaks the whole install. Reach a vLLM
-# server through the openai-compatible provider and its /v1 URL instead.
+# provider require, so including it here breaks the whole install. The vllm
+# provider still works without it: it falls back to the stock OpenAI model
+# against the server's /v1 URL (geoagent.core.model.resolve_model).
 WHITEBOX_PACKAGES = [("whitebox", "whitebox>=2.3.6")]
 NASA_PACKAGES = [("earthaccess", "earthaccess>=0.10")]
 GEE_PACKAGES = [

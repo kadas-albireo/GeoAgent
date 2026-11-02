@@ -50,8 +50,9 @@ requesty = ["openai>=2.0"]
 openai-compatible = ["openai>=2.0"]
 # strands-vllm pins openai<2.0, which conflicts with the openai>=2.0 needed by
 # the default openai-codex provider, so this extra is not part of `providers`
-# or `all`. Point the `openai-compatible` provider at a vLLM server's /v1 URL
-# to use vLLM alongside the rest of the stack.
+# or `all`. The `vllm` provider works without it (it falls back to the stock
+# OpenAI model at the server's /v1 URL); install this extra only for
+# strands-vllm-specific features, in an environment without openai>=2.0.
 vllm = ["strands-vllm"]
 bedrock = []
 leafmap = ["leafmap>=0.43"]
